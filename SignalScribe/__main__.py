@@ -51,8 +51,8 @@ def main():
     # Handle all other exceptions:
     except Exception as e:
         logger.error(f"Unhandled exception: {e}")
-        if not args.silent:
-            console.print(f"[red]An error occurred: {e}")
+        console.print(f"[red]An error occurred: {e}")
+        raise e
         return 1
 
 

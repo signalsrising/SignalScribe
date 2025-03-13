@@ -197,6 +197,6 @@ if __name__ == "__main__":
     
     recording_dir = detector.get_recording_directory()
     if recording_dir:
-        print(f"SDRTrunk recording directory: `{recording_dir}`")
+        print(f"SDRTrunk recording directory: {recording_dir}")
     else:
         print("Could not determine SDRTrunk recording directory")

@@ -96,9 +96,14 @@ def parse_args(args=None):
     parser.add_argument(
         "folder",
         type=str,
-        nargs="?",  # Make it optional with a default value
-        default=".",  # Default to current directory if not specified
+        nargs="?",  # Make it optional
         help="Folder to watch for audio files",
+    )
+
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="List all available models",
     )
 
     parser.add_argument(

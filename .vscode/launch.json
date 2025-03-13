@@ -8,8 +8,10 @@
             "module": "SignalScribe",
             "justMyCode": false,
             "args": [
-                // "--help",
-                "--recursive",
+                "-V",
+                // "--recursive",
+                // "~/Development/Audio"
+                "--list-models",
                 "~/Development/Audio"
             ],
             "env": {

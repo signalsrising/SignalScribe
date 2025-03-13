@@ -2,6 +2,8 @@ import hashlib
 import platform
 import requests
 import zipfile
+import re
+from bs4 import BeautifulSoup
 from pathlib import Path
 from typing import List, Optional, Dict, Tuple
 from rich.prompt import Confirm
@@ -14,6 +16,7 @@ from rich.progress import (
     TransferSpeedColumn,
     TimeRemainingColumn,
 )
+from rich.table import Table
 from .utils import logger, console, format_size
 from .colors import AppColors, ConsoleColors
 
@@ -63,6 +66,9 @@ class ModelManager:
         self.required_files = ["ggml"]
         if platform.system() == "Darwin":  # macOS
             self.required_files.append("coreml")
+
+        logger.debug(f"Required files: {self.required_files}")
+
 
     def _calculate_hash(self, file_path: Path) -> str:
         """Calculate the SHA-256 hash of a file."""
@@ -159,6 +165,8 @@ class ModelManager:
             file_info = self.model_info["files"][file_type]
             file_path = self.model_dir / file_info["filename"]
 
+            logger.debug("Searching for missing files")
+
             # For CoreML, check the directory exists
             if file_type == "coreml":
                 model_dir = file_path.with_suffix("")  # Remove .zip
@@ -237,3 +245,172 @@ class ModelManager:
                     return False
 
         return True
+
+    def _get_file_hash(self, url: str) -> Optional[str]:
+        """
+        Attempts to download and calculate the SHA256 hash for a file.
+        Uses a streaming approach to avoid loading entire file into memory.
+        
+        Args:
+            url: URL of the file to hash
+            
+        Returns:
+            SHA256 hash as a string, or None if download failed
+        """
+        try:
+            with console.status(f"Calculating hash for {url.split('/')[-1]}..."):
+                response = requests.get(url, stream=True)
+                response.raise_for_status()
+                
+                # Calculate hash
+                sha256_hash = hashlib.sha256()
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        sha256_hash.update(chunk)
+                
+                return sha256_hash.hexdigest()
+        except Exception as e:
+            logger.error(f"Failed to calculate hash for {url}: {e}")
+            return None
+
+    def _get_file_details(self, filename: str) -> Optional[Tuple[str, str]]:
+        """
+        Fetches the SHA256 hash for a file directly from Hugging Face,
+        without downloading the file itself.
+        
+        Args:
+            filename: Name of the file to get hash for
+            
+        Returns:
+            Tuple of (size, hash), or None if not found
+        """
+        try:
+            # Construct the blob URL for the file
+            blob_url = f"https://huggingface.co/ggerganov/whisper.cpp/blob/main/{filename}"
+
+            size = None
+            hash = None
+            
+            response = requests.get(blob_url)
+            response.raise_for_status()
+            
+            # Parse the HTML
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Look for the Git LFS details section
+            sha_text = None
+            for strong_tag in soup.find_all('strong'):
+                if "SHA256:" in strong_tag.text:
+                    # The hash is in the next sibling text
+                    sha_text = strong_tag.parent.text.strip()
+                    hash = sha_text.split(":")[1].strip()
+                    continue
+                if "Size" in strong_tag.text:
+                    size = strong_tag.parent.text.split(":")[1].strip()
+                    continue
+            
+            if size and hash:
+                return size, hash
+            
+            logger.warning(f"Could not find SHA256 hash for {filename} on Hugging Face")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch hash for {filename}: {e}")
+            return None
+
+
+    def get_available_models(self) -> Dict[str, Dict[str, str]]:
+        """
+        Fetches specifically the models that have CoreML versions available.
+        Only includes models that have both:
+        - A standard .bin file starting with 'ggml-'
+        - A corresponding CoreML file ending with '-encoder.mlmodelc.zip'
+                
+        Returns:
+            A dictionary of model information with both standard and CoreML variants:
+            {
+                "model_name": {
+                    "bin": "URL to the standard .bin model file",
+                    "bin_size": "Size of the bin file",
+                    "bin_sha256": "SHA256 hash of the bin file",
+                    "coreml": "URL to the CoreML encoder.mlmodelc.zip file",
+                    "coreml_size": "Size of the coreml file",
+                    "coreml_sha256": "SHA256 hash of the coreml file"
+                },
+                ...
+            }
+        """
+        # Base URL for the Hugging Face repository
+        repo_url = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
+        base_download_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+        
+        try:
+            # Fetch the repository page
+            response = requests.get(repo_url)
+            response.raise_for_status()
+            
+            # Parse the HTML content
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Initialize results dictionary
+            coreml_models = {}
+            
+            # Extract all file links
+            file_links = []
+            for a_tag in soup.find_all('a', href=True):
+                href = a_tag.get('href', '')
+                if '/blob/main/' in href and not href.endswith('/'):
+                    # Extract filename from URL
+                    filename = href.split('/')[-1]
+                    file_links.append(filename)
+            
+            # Specifically find CoreML models
+            coreml_files = [f for f in file_links if f.startswith('ggml-') and f.endswith('-encoder.mlmodelc.zip')]
+
+            if coreml_files and len(coreml_files) > 0:
+
+                with console.status(f"Found {len(coreml_files)} models, fetching details (1/{len(coreml_files)})") as status:
+
+                    # For each CoreML file, find the corresponding .bin file
+                    for i, coreml_file in enumerate(coreml_files):
+                        if i > 2:
+                            break
+                        # Extract base model name by removing the "-encoder.mlmodelc.zip" suffix
+                        base_name = coreml_file.replace("-encoder.mlmodelc.zip", "")
+                        display_name = base_name.replace("ggml-", "")
+                        bin_file = f"{base_name}.bin"
+
+                        status.update(f"Found {len(coreml_files)} models, fetching details of {display_name} ({i+1}/{len(coreml_files)})")
+                        
+                        # Only include models that have both .bin and CoreML versions
+                        if bin_file in file_links:
+                            bin_url = f"{base_download_url}/{bin_file}"
+                            coreml_url = f"{base_download_url}/{coreml_file}"
+                            
+                            coreml_models[display_name] = {
+                                "bin": bin_url,
+                                "coreml": coreml_url,
+                                "bin_size": None,
+                                "bin_sha256": None,
+                                "coreml_size": None,
+                                "coreml_sha256": None
+                            }
+                            
+                            # Get bin file info
+                            bin_size, bin_hash = self._get_file_details(bin_file)
+                            if bin_size and bin_hash:
+                                coreml_models[display_name]["bin_size"] = bin_size
+                                coreml_models[display_name]["bin_sha256"] = bin_hash
+                            
+                            # Get CoreML file info
+                            coreml_size, coreml_hash = self._get_file_details(coreml_file)
+                            if coreml_size and coreml_hash:
+                                coreml_models[display_name]["coreml_size"] = coreml_size
+                                coreml_models[display_name]["coreml_sha256"] = coreml_hash
+                                                        
+            return coreml_models
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch CoreML models: {e}")
+            return {}

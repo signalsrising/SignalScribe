@@ -26,6 +26,8 @@ dependencies = [
     "pyyaml",
     "pywhispercpp",
     "psutil",
+    "requests",
+    "beautifulsoup4",
 ]
 requires-python = ">=3.8"
 

@@ -14,7 +14,7 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-from rich.prompt import Confirm
+from rich.prompt import Confirm, IntPrompt
 from .utils import logger, console, nested_dict_to_string, resolve_filepath
 from .model import ModelManager
 from .transcriber import Transcriber
@@ -24,6 +24,8 @@ from .version import __version__
 from .trackedqueue import TrackedQueue
 from .output import Output
 import threading
+import sys
+from .sdrtrunk import SDRTrunkDetector
 
 
 def _cleanup_old_logs(log_dir: Path, keep_last: int = 10) -> None:
@@ -48,6 +50,7 @@ class SignalScribeApp:
     def __init__(self, args):
         """Initialize the application with command line arguments."""
         self.args = args  # Command line arguments set by user
+        self.monitoring_sdrtrunk = False # Is app automatically monitoring SDRTrunk?
 
         # Shared state between components
         self.shared_colors = {}  # Dictionary to share colors between watcher and output
@@ -67,43 +70,106 @@ class SignalScribeApp:
         """Initialize all components."""
         self.print_banner()
 
-        # Check that the folder exists, and if not, prompt the user to create it
-        self.folder_path = Path(self.args.folder).expanduser().resolve()
-        if not self.folder_path.exists():
-            console.print(
-                f"[red]Error:[/red] The folder to observe does not exist: {self.folder_path}"
-            )
-            if Confirm.ask(
-                f"Would you like to create it?",
-                default=False,
-            ):
-                try:
-                    self.folder_path.mkdir(parents=True, exist_ok=True)
-                except Exception as e:
-                    console.print(
-                        f"[red]Error:[/red] Failed to create folder: {self.folder_path}"
-                    )
-                    return False
+        # If folder is not specified, try to get SDRTrunk recording directory
+        if not self.args.folder:
+            logger.info("No folder specified, attempting to use SDRTrunk recording directory")
+            detector = SDRTrunkDetector()
+            recording_dir = detector.get_recording_directory()
+            
+            if recording_dir:
+                self.args.folder = str(recording_dir)
+                logger.info(f"Monitoring SDRTrunk recording directory: {self.args.folder}")
+                self.monitoring_sdrtrunk = True
             else:
+                logger.error("Could not determine SDRTrunk recording directory")
+                console.print("[red]Error:[/red] No folder specified and could not find SDRTrunk recording directory.")
+                console.print("Please either:")
+                console.print("  1. Specify a folder with --folder")
+                console.print("  2. Ensure SDRTrunk is installed and properly configured")
+                console.print("     (SDRTrunk does not need to be running)")
                 return False
+            
+        else:
+            # Check that the folder exists, and if not, prompt the user to create it
+            self.folder_path = Path(self.args.folder).expanduser().resolve()
 
-        # Check that the folder is a directory, and if not (i.e. a file), prompt the user to use its parent directory
-        if not self.folder_path.is_dir():
-            console.print(
-                f"[red]Error:[/red] The specified path is not a directory: {self.folder_path}"
-            )
-            parent_dir = self.folder_path.parent
-            if Confirm.ask(
-                f"Would you like to use its parent directory instead? {parent_dir}",
-                default=False,
-            ):
-                self.folder_path = parent_dir
-            else:
-                return False
+            if not self.folder_path.exists():
+                console.print(
+                    f"[red]Error:[/red] The folder to observe does not exist: {self.folder_path}"
+                )
+                if Confirm.ask(
+                    f"Would you like to create it?",
+                    default=False,
+                ):
+                    try:
+                        self.folder_path.mkdir(parents=True, exist_ok=True)
+                    except Exception as e:
+                        console.print(
+                            f"[red]Error:[/red] Failed to create folder: {self.folder_path}"
+                        )
+                        return False
+                else:
+                    return False
+
+            # Check that the folder is a directory, and if not (i.e. a file), prompt the user to use its parent directory
+            if not self.folder_path.is_dir():
+                console.print(
+                    f"[red]Error:[/red] The specified path is not a directory: {self.folder_path}"
+                )
+                parent_dir = self.folder_path.parent
+                if Confirm.ask(
+                    f"Would you like to use its parent directory instead? {parent_dir}",
+                    default=False,
+                ):
+                    self.folder_path = parent_dir
+                else:
+                    return False
 
         # Initialize model management - checks for required models and downloads them if needed
         model_dir = self.args.model_dir if hasattr(self.args, "model_dir") else None
         self.model_manager = ModelManager(self.args.model, model_dir)
+
+        if self.args.list_models:
+            available_models = self.model_manager.get_available_models()
+            console.print(f"Available models:")
+            if available_models:
+                grid = Table.grid(padding=(0, 2))
+                grid.add_column("Index", justify="left", style="blue", no_wrap=True)
+                grid.add_column("Model", justify="left", style="bold", no_wrap=True)
+                grid.add_column("Size", justify="left", style="dim", no_wrap=True)
+
+                choices = []
+
+                max_index = 0
+
+                for i, (base_name, model_info) in enumerate(available_models.items()):
+                    index = i+1
+                    max_index = index
+                    choices.append(str(index))
+                    if sys.platform == "darwin":
+                        grid.add_row(f"{index}", f"{base_name}", f"{model_info['bin_size']} (+ {model_info['coreml_size']} for CoreML)")
+                    else:
+                        grid.add_row(f"{index}", f"{base_name}", f"{model_info['bin_size']}")
+
+                console.print(grid)
+                
+                selected_index = None
+
+                while True:
+                    selected_index = IntPrompt.ask(
+                        f"\n[bold]Select which model to use[/bold] (Press CTRL+C to exit)"
+                    )
+                    if selected_index >= 1 and selected_index <= max_index:
+                        break
+                    console.print(f"[prompt.invalid]Number must be between 1 and {max_index}")
+                        
+                if selected_index:
+                    self.args.model = list(available_models.keys())[selected_index-1]
+                    console.print(f"Selected model: [bold][blue]{self.args.model}[/blue][/bold]")
+                else:
+                    console.print("[red]No model selected, quitting[/red]") # Should never happen
+                    return False
+
 
         # Ensure model files exist
         if not self.model_manager.ensure_models_exist():
@@ -119,6 +185,16 @@ class SignalScribeApp:
         # Log the resolved paths
         logger.info(f"Using CSV file: {self.csv_filepath}")
         logger.info(f"Using log file: {self.log_filepath}")
+
+        # Pipeline is:
+        # FolderWatcher: Monitors for new files and if they are audio files adds
+        #                them to decoding queue
+        # Decoder:       Monitors decoding queue and any files in it are converted
+        #                to raw numpy array then placed in transcribing queue.
+        # Transcriber:   Monitors transcribing queue and transcribes any audio data
+        #                into text which is then placed on output queue.
+        # Output:        Prints transcriptions in the output queue to screen and
+        #                saves them to disk. In future can do more with the texts.
 
         # Initialize queues for passing data between stages of the transcription pipeline
         self.decoding_queue = TrackedQueue(name="Decoding")
@@ -251,7 +327,7 @@ class SignalScribeApp:
         """Print the intro message."""
         console.print(
             Panel(
-                f"[bold][bright_cyan]SignalScribe[/bold]\n[cyan]by Signals Rising\n[bright_black]Version {__version__}",
+                f"[bold][bright_cyan]SignalScribe[/bright_cyan][/bold]\n[cyan3]by Signals Rising[/cyan3]\n[dim]Version {__version__}",
                 expand=False,
             )
         )
@@ -285,9 +361,13 @@ class SignalScribeApp:
         grid.add_row("Model", self.args.model, "Set with --model")
         grid.add_row("Compute", system_info_string)
         grid.add_row("CPU Threads", f"{self.args.threads}", "Set with --threads")
-        grid.add_row("CSV File", str(self.csv_filepath), "Set with --csv-filepath")
-        grid.add_row("Log File", str(self.log_filepath), "Set with --log-filepath")
-        grid.add_row("Monitoring", str(self.args.folder))
+        grid.add_row("CSV File", str(self.csv_filepath), "Set with --csv-filepath, remove with --no-csv")
+        grid.add_row("Log File", str(self.log_filepath), "Set with --log-filepath, remove with --no-logs")
+
+        if self.monitoring_sdrtrunk:
+            grid.add_row("Monitoring", f"{str(self.args.folder)} [red]Autodetected from SDRTrunk[/red]")
+        else:
+            grid.add_row("Monitoring", str(self.args.folder))
 
         console.print(grid)
         console.print("")
@@ -310,6 +390,7 @@ class SignalScribeApp:
 
         except Exception as e:
             logger.error(f"An error occurred: {e}")
+            raise e
             self.shutdown()
             return 1
 
