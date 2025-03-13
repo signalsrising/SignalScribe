@@ -19,11 +19,13 @@ class Decoder:
     """Decodes audio files into numpy arrays, acting as a middle component between watcher and transcriber."""
 
     def __init__(
-        self, decoding_queue, transcribing_queue, silent: bool = False
+        self, decoding_queue, transcribing_queue, silent: bool = False, 
+        file_processed_callback=None
     ):
         """Initialize the decoder with the specified settings."""
         self.stop_event = Event()
         self.silent = silent
+        self.file_processed_callback = file_processed_callback
 
         # Start consumer thread
         self.decoder_thread = Thread(
@@ -61,10 +63,11 @@ class Decoder:
                             
                             # Log completion
                             duration = time.monotonic() - start_time
-                            completion_msg = f"Completed decoding of {transcription.filepath} in {duration:.2f}s"
-                            logger.info(completion_msg)
-                            if not self.silent:
-                                console.print(f"[blue]{completion_msg}")
+                            logger.info(f"Completed decoding of {transcription.filepath} in {duration:.2f}s")
+                            
+                            # Call callback if provided
+                            if self.file_processed_callback:
+                                self.file_processed_callback()
                                 
                     except Exception as e:
                         error_msg = f"Failed to decode {transcription.filepath}: {e}"

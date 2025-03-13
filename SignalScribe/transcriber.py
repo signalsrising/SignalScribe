@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 from queue import Empty  # Keep using this for exception handling
 from threading import Thread, Event
-from multiprocessing import Process, Queue
+from multiprocessing import Process, Queue, Value, Lock
 import csv
 import numpy as np
 from pywhispercpp.model import Model, utils
@@ -16,7 +16,7 @@ from .transcription import Transcription
 
 # Define the worker function outside of any class to avoid pickling issues
 def transcriber_worker(model_name, model_dir, n_threads, task_queue, result_queue, 
-                      control_queue, csv_filepath, silent, print_progress):
+                      csv_filepath, silent, print_progress):
     """Worker process function that runs transcription tasks."""
     try:
         # Load the model in this process
@@ -36,38 +36,28 @@ def transcriber_worker(model_name, model_dir, n_threads, task_queue, result_queu
                 writer = csv.writer(csv_file)
                 writer.writerow(["Timestamp", "File Path", "Duration", "Transcription"])
         
-        # Process tasks until told to stop
-        running = True
-        while running:
-            # First check if we should stop
+        # Process tasks until None sentinel is received
+        while True:
             try:
-                if not control_queue.empty():
-                    signal = control_queue.get_nowait()
-                    if signal == "STOP":
-                        logger.info("Transcriber process received stop signal")
-                        running = False
-                        break
-            except:
-                pass  # Continue if there's an error checking the control queue
+                # Get the next task with a timeout to keep the process responsive
+                transcription = task_queue.get(timeout=0.5)
                 
-            # Process tasks if we're still running
-            if running:
-                try:
-                    # Short timeout to check control queue frequently
-                    # print("Transcriber process waiting for audio data")
-                    transcription = task_queue.get(timeout=0.5)  # 0.5 second timeout
-                    print(f"\nGot {len(transcription.audio)} Bytes")
-                    # print(f"Transcriber process got audio data for {transcription.filepath}")
-                    
-                    # Process the audio
-                    process_task(transcription, model, result_queue, csv_filepath, silent)
-                    
-                    logger.debug(f"Transcriber process completed transcription for {transcription.filepath}")
-                    
-                except Empty:
-                    continue  # No tasks available, check control queue again
-                except Exception as e:
-                    logger.error(f"Error transcribing audio data: {e}")
+                # Check for None sentinel (shutdown signal)
+                if transcription is None:
+                    logger.info("Transcriber process received shutdown sentinel")
+                    break
+                
+                logger.debug(f"Transcriber process got audio data for {transcription.filepath}")
+                
+                # Process the audio
+                process_task(transcription, model, result_queue, csv_filepath, silent)
+                
+                logger.debug(f"Transcriber process completed transcription for {transcription.filepath}")
+                
+            except Empty:
+                continue  # No tasks available, just keep checking
+            except Exception as e:
+                logger.error(f"Error transcribing audio data: {e}")
     
     except Exception as e:
         logger.error(f"Error in transcriber worker process: {e}")
@@ -122,11 +112,11 @@ class Transcriber:
         csv_filepath: str,
         silent: bool = False,
         print_progress: bool = False,
+        completed_counter = None  # Optional shared counter
     ):
         """Initialize the transcriber with the specified model and settings."""
         self.task_queue = task_queue
         self.result_queue = Queue()  # multiprocessing queue for results
-        self.control_queue = Queue()  # Control queue for signaling process shutdown
         
         self.stop_event = Event()  # This is only used in the main process
         self.silent = silent
@@ -138,6 +128,9 @@ class Transcriber:
         self.csv_filepath = csv_filepath
         self.print_progress = print_progress
         
+        # Use the shared completed counter if provided
+        self.completed_counter = completed_counter
+        
         # Start worker process
         self.worker_process = Process(
             target=transcriber_worker,
@@ -147,7 +140,6 @@ class Transcriber:
                 n_threads,
                 task_queue,
                 self.result_queue,
-                self.control_queue,
                 csv_filepath,
                 silent,
                 print_progress,
@@ -188,11 +180,13 @@ class Transcriber:
                 result = self.result_queue.get(timeout=0.5)
                 if result:
                     filepath, text = result
-                    completion_msg = f"Completed transcription of {filepath}"
-                    logger.info(completion_msg)
-                    if not self.silent:
-                        console.print(f"[green]{completion_msg}\n[blue]{text}[/blue]")
-                
+                    # Update completion counter if provided
+                    if self.completed_counter is not None:
+                        with self.completed_counter[1]:  # Use the lock
+                            self.completed_counter[0].value += 1  # Increment the counter
+                            
+                    logger.info(f"Completed transcription of {filepath}")
+
             except Empty:
                 continue  # No results available, check stop_event again
             except Exception as e:
@@ -203,12 +197,12 @@ class Transcriber:
         logger.info("Shutting down transcriber...")
         self.stop_event.set()
         
-        # Send stop signal to worker process
+        # Send None sentinel to signal the worker process to stop
         try:
-            self.control_queue.put("STOP")
-            logger.info("Sent stop signal to transcriber process")
-        except:
-            logger.warning("Failed to send stop signal to transcriber process")
+            self.task_queue.put(None)
+            logger.info("Sent shutdown sentinel to transcriber process")
+        except Exception as e:
+            logger.warning(f"Failed to send shutdown sentinel to transcriber process: {e}")
 
         # Wait for result thread to finish
         self.result_thread.join(timeout=5.0)
