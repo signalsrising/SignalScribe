@@ -1,4 +1,4 @@
-from queue import Queue
+from multiprocessing import Queue
 from watchdog.events import FileSystemEvent, PatternMatchingEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
