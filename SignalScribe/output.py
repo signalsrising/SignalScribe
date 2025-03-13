@@ -6,7 +6,8 @@ import os
 import re
 
 from .trackedqueue import TrackedQueue
-from .utils import logger, console, insert_string
+from .utils import insert_string
+from .logging import logger, console
 
 
 class Output:

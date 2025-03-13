@@ -6,11 +6,8 @@ import subprocess
 import numpy as np
 from queue import Empty  # Keep this for exception handling
 from threading import Thread, Event
-from typing import Optional
-from datetime import datetime
 
-from .utils import logger, console
-from .transcription import Transcription
+from .logging import logger, console
 
 
 class Decoder:
@@ -20,11 +17,9 @@ class Decoder:
         self,
         decoding_queue,
         transcribing_queue,
-        silent: bool = False,
     ):
         """Initialize the decoder with the specified settings."""
         self.stop_event = Event()
-        self.silent = silent
 
         # Start consumer thread
         self.decoder_thread = Thread(
@@ -71,10 +66,7 @@ class Decoder:
                             )
 
                     except Exception as e:
-                        error_msg = f"Failed to decode {transcription.filepath}: {e}"
-                        logger.error(error_msg)
-                        if not self.silent:
-                            console.print(f"[red]{error_msg}")
+                        logger.error(f"Failed to decode {transcription.filepath}: {e}")
 
             except Empty:
                 continue  # No files available to decode

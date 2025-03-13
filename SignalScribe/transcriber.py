@@ -5,8 +5,8 @@ import logging
 import time
 
 from .transcription import Transcription
-from .utils import logger, console, APP_NAME, MODEL_CHOICES, DEFAULT_MODEL
-from logging import Logger
+from .defaults import DEFAULT_MODEL
+from .logging import logger
 
 """
 Whisper seems to lock the GIL while transcribing so even if its

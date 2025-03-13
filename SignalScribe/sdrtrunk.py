@@ -13,7 +13,7 @@ if system == "Windows":
 elif system == "Darwin":  # macOS
     import plistlib
 
-from .utils import logger
+from .logging import logger
 
 
 class SDRTrunkDetector:

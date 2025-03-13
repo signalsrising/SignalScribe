@@ -9,7 +9,9 @@ import time
 import yaml
 
 from .transcription import Transcription
-from .utils import logger, console, COLORS_SETTINGS_NAME
+from .defaults import COLORS_FILE_NAME
+from .logging import logger, console
+
 
 POLLING_INTERVAL = 10
 
@@ -53,7 +55,7 @@ class FolderWatcher:
                 self.observer = Observer()
                 return
         except Exception as e:
-            logger.warning(f"Error initializing observer: {e}")
+            logger.warning(f"Error initialising observer: {e}")
             self.polling = True
 
         self.observer = PollingObserver(timeout=self.polling_interval)
@@ -104,12 +106,12 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
 
         # Create patterns for watchdog
         patterns = ["*." + fmt for fmt in formats]
-        patterns.append(COLORS_SETTINGS_NAME)
+        patterns.append(COLORS_FILE_NAME)
         super().__init__(patterns=patterns)
 
         # Set up color highlighting
         self.colors = dict()
-        self._update_colors(os.path.join(folder, COLORS_SETTINGS_NAME))
+        self._update_colors(os.path.join(folder, COLORS_FILE_NAME))
 
         # Warn if watching current directory
         if folder == os.getcwd():
@@ -164,7 +166,7 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         filepath = event.src_path  # Full path to the new file
         filename = os.path.basename(filepath)  # Name of the new file
 
-        if filename == COLORS_SETTINGS_NAME:
+        if filename == COLORS_FILE_NAME:
             self._update_colors(filepath)
             return
 
@@ -174,12 +176,12 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
 
     def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification events."""
-        if os.path.basename(event.src_path) == COLORS_SETTINGS_NAME:
+        if os.path.basename(event.src_path) == COLORS_FILE_NAME:
             self._update_colors(event.src_path)
 
     def on_closed(self, event: FileSystemEvent) -> None:
         """Handle file close events."""
-        if os.path.basename(event.src_path) == COLORS_SETTINGS_NAME:
+        if os.path.basename(event.src_path) == COLORS_FILE_NAME:
             self._update_colors(event.src_path)
 
     def on_deleted(self, event: FileSystemEvent) -> None:

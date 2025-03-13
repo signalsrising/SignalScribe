@@ -1,18 +1,27 @@
 from typing import Optional, Dict, Tuple
 from pathlib import Path
 import requests
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, DownloadColumn, TransferSpeedColumn, TimeRemainingColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    BarColumn,
+    DownloadColumn,
+    TransferSpeedColumn,
+    TimeRemainingColumn,
+)
 import json
 from bs4 import BeautifulSoup
 import zipfile
 import hashlib
-from .utils import logger, console
+from .logging import logger, console
 import platform
 
 
 """
 Contains all static functions for ModelManager to download and read model info files.
 """
+
 
 def get_file_details(filename: str) -> Optional[Tuple[str, str]]:
     """
@@ -29,11 +38,11 @@ def get_file_details(filename: str) -> Optional[Tuple[str, str]]:
 
     try:
         # Construct the blob URL for the file
-        blob_url = (
-            f"https://huggingface.co/ggerganov/whisper.cpp/blob/main/{filename}"
-        )
+        blob_url = f"https://huggingface.co/ggerganov/whisper.cpp/blob/main/{filename}"
 
-        download_url = f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{filename}"
+        download_url = (
+            f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{filename}"
+        )
 
         size = None
         hash = None
@@ -97,111 +106,103 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
     repo_url = "https://huggingface.co/ggerganov/whisper.cpp/tree/main"
     base_download_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
-    try:
-        # Fetch the repository page
-        response = requests.get(repo_url)
-        response.raise_for_status()
+    # Fetch the repository page
+    response = requests.get(repo_url)
+    response.raise_for_status()
 
-        # Parse the HTML content
-        soup = BeautifulSoup(response.text, "html.parser")
+    # Parse the HTML content
+    soup = BeautifulSoup(response.text, "html.parser")
 
-        # Initialize results dictionary
-        coreml_models = {}
+    # Initialize results dictionary
+    coreml_models = {}
 
-        # Extract all file links
-        file_links = []
-        for a_tag in soup.find_all("a", href=True):
-            href = a_tag.get("href", "")
-            if "/blob/main/" in href and not href.endswith("/"):
-                # Extract filename from URL
-                filename = href.split("/")[-1]
-                file_links.append(filename)
+    # Extract all file links
+    file_links = []
+    for a_tag in soup.find_all("a", href=True):
+        href = a_tag.get("href", "")
+        if "/blob/main/" in href and not href.endswith("/"):
+            # Extract filename from URL
+            filename = href.split("/")[-1]
+            file_links.append(filename)
 
-        # Filter for only CoreML (compatible) models
-        # N.b.: Users could technically user any model they want, but
-        #       we're artifically limiting all users to only CoreML compatible
-        #       models for now to make cross platform development easier.
-        coreml_compatible_models = [
-            f
-            for f in file_links
-            if f.startswith("ggml-") and f.endswith("-encoder.mlmodelc.zip")
-        ]
+    # Filter for only CoreML (compatible) models
+    # N.b.: Users could technically user any model they want, but
+    #       we're artifically limiting all users to only CoreML compatible
+    #       models for now to make cross platform development easier.
+    coreml_compatible_models = [
+        f
+        for f in file_links
+        if f.startswith("ggml-") and f.endswith("-encoder.mlmodelc.zip")
+    ]
 
-        if not coreml_compatible_models or len(coreml_compatible_models) == 0:
-            logger.warning("No CoreML compatible models found")
-            return {}
+    if not coreml_compatible_models or len(coreml_compatible_models) == 0:
+        logger.warning("No CoreML compatible models found")
+        return {}
 
-        with console.status(
-            f"Found {len(coreml_compatible_models)} models, fetching details (1/{len(coreml_compatible_models)})"
-        ) as status:
+    with console.status(
+        f"Found {len(coreml_compatible_models)} models, fetching details (1/{len(coreml_compatible_models)})"
+    ) as status:
 
-            # For each CoreML file, find the corresponding .bin file
-            for i, coreml_model_file in enumerate(coreml_compatible_models):
-                # TODO: REMOVE:
-                if i > 2:
-                    break
-                # Extract base model name by removing the "-encoder.mlmodelc.zip" suffix
-                model_name = coreml_model_file.replace("-encoder.mlmodelc.zip", "")
-                display_name = model_name.replace("ggml-", "")
-                bin_model_file = f"{model_name}.bin"
+        # For each CoreML file, find the corresponding .bin file
+        for i, coreml_model_file in enumerate(coreml_compatible_models):
+            # TODO: REMOVE:
+            if i > 2:
+                break
+            # Extract base model name by removing the "-encoder.mlmodelc.zip" suffix
+            model_name = coreml_model_file.replace("-encoder.mlmodelc.zip", "")
+            display_name = model_name.replace("ggml-", "")
+            bin_model_file = f"{model_name}.bin"
 
-                status.update(
-                    f"Found {len(coreml_compatible_models)} models, "
-                    f"fetching details of {display_name} "
-                    f"({i+1}/{len(coreml_compatible_models)})"
-                )
+            status.update(
+                f"Found {len(coreml_compatible_models)} models, "
+                f"fetching details of {display_name} "
+                f"({i+1}/{len(coreml_compatible_models)})"
+            )
 
-                if bin_model_file in file_links:
-                    bin_url = f"{base_download_url}/{bin_model_file}"
-                    coreml_url = f"{base_download_url}/{coreml_model_file}"
+            if bin_model_file in file_links:
+                bin_url = f"{base_download_url}/{bin_model_file}"
+                coreml_url = f"{base_download_url}/{coreml_model_file}"
 
-                    # Check our models dir to see if the files are present
-                    bin_filepath = model_dir / bin_model_file
+                # Check our models dir to see if the files are present
+                console.print(f"Checking for {bin_model_file} in {model_dir}")
+                bin_filepath = model_dir / bin_model_file
 
-                    bin_downloaded = bin_filepath.exists()
-                    
+                bin_downloaded = bin_filepath.exists()
 
-                    coreml_models[display_name]["bin"] = {
-                        "url": bin_url,
+                coreml_models[display_name]["bin"] = {
+                    "url": bin_url,
+                    "size": None,
+                    "sha256": None,
+                    "downloaded": bin_downloaded,
+                }
+
+                # Get bin file info
+                bin_size, bin_hash = get_file_details(bin_model_file)
+                if bin_size and bin_hash:
+                    coreml_models[display_name]["bin_size"] = bin_size
+                    coreml_models[display_name]["bin_sha256"] = bin_hash
+
+                if platform.system() == "Darwin":
+                    # Get CoreML file info
+                    coreml_size, coreml_hash = get_file_details(coreml_model_file)
+                    if coreml_size and coreml_hash:
+                        coreml_models[display_name]["coreml_size"] = coreml_size
+                        coreml_models[display_name]["coreml_sha256"] = coreml_hash
+
+                    coreml_filepath = model_dir / coreml_model_file
+                    coreml_downloaded = coreml_filepath.exists()
+
+                    coreml_models[display_name]["coreml"] = {
+                        "url": coreml_url,
+                        "filepath": coreml_filepath,
                         "size": None,
                         "sha256": None,
-                        "downloaded": bin_downloaded,
+                        "downloaded": coreml_downloaded,
                     }
 
-                    # Get bin file info
-                    bin_size, bin_hash = get_file_details(bin_model_file)
-                    if bin_size and bin_hash:
-                        coreml_models[display_name]["bin_size"] = bin_size
-                        coreml_models[display_name]["bin_sha256"] = bin_hash
+    return coreml_models
 
-                    if platform.system() == "Darwin":
-                        # Get CoreML file info
-                        coreml_size, coreml_hash = get_file_details(
-                            coreml_model_file
-                        )
-                        if coreml_size and coreml_hash:
-                            coreml_models[display_name]["coreml_size"] = coreml_size
-                            coreml_models[display_name][
-                                "coreml_sha256"
-                            ] = coreml_hash
-                            
-                        coreml_filepath = model_dir / coreml_model_file
-                        coreml_downloaded = coreml_filepath.exists()
 
-                        coreml_models[display_name]["coreml"] = {
-                            "url": coreml_url,
-                            "filepath": coreml_filepath,
-                            "size": None,
-                            "sha256": None,
-                            "downloaded": coreml_downloaded,
-                        }
-
-        return coreml_models
-
-    except Exception as e:
-        logger.error(f"Failed to fetch CoreML models: {e}")
-        return {}
-    
 def get_download_size(url: str) -> Optional[int]:
     """Get file size in bytes using a HEAD request.
     For letting user know how big the download will be."""
@@ -215,6 +216,7 @@ def get_download_size(url: str) -> Optional[int]:
     except Exception as e:
         logger.error(f"Failed to get file size for {url}: {e}")
         return None
+
 
 def download_file(url: str, target_path: Path) -> bool:
     """Download a file with progress indication."""
@@ -242,9 +244,7 @@ def download_file(url: str, target_path: Path) -> bool:
         ) as progress:
 
             # Create the progress bar
-            task = progress.add_task(
-                f"Downloading {target_path.name}", total=file_size
-            )
+            task = progress.add_task(f"Downloading {target_path.name}", total=file_size)
 
             # Download with progress updates
             with open(target_path, "wb") as f:
@@ -258,7 +258,8 @@ def download_file(url: str, target_path: Path) -> bool:
     except Exception as e:
         logger.error(f"Failed to download {url}: {e}")
         return False
-    
+
+
 def read_model_info_file(file_path: Path) -> Dict:
     """
     Read a JSON file into a Python dictionary.
@@ -268,20 +269,17 @@ def read_model_info_file(file_path: Path) -> Dict:
 
     Returns:
         Dictionary containing the JSON data, or empty dict if file doesn't exist or is invalid
+
+    Throws:
+        FileNotFoundError: If the file does not exist
+        json.JSONDecodeError: If the file is not valid JSON
+        Exception: If the file is in use by another process
     """
     logger.debug(f"Reading model info file from {file_path}")
 
-    try:
-        if not file_path.exists():
-            logger.debug(f"Model info file does not exist: {file_path}")
-            return {}
+    with open(file_path, "r") as f:
+        return json.loads(f.read())
 
-        with open(file_path, "r") as f:
-            model_info = json.loads(f.read())
-            return model_info
-    except Exception as e:
-        logger.error(f"Failed to read model info file {file_path}: {e}")
-        return {}
 
 def write_model_info_file(file_path: Path, model_info: Dict) -> bool:
     """
@@ -305,6 +303,28 @@ def write_model_info_file(file_path: Path, model_info: Dict) -> bool:
         return True
     except Exception as e:
         raise Exception(f"Failed to write model info file {file_path}: {e}")
+
+
+def validate_model_info(model_info: Dict) -> bool:
+    """Validate the model info dictionary."""
+
+    if not model_info:
+        return False
+
+    required_keys = ["url", "size", "sha256", "downloaded"]
+
+    # Check that each model has a bin entry, and if on mac, also a coreml entry
+    for model_name, model_data in model_info.items():
+        if "bin" not in model_data:
+            return False
+        if platform.system() == "Darwin" and "coreml" not in model_data:
+            return False
+        # check that each model_data entry has all of the following:
+        # url, size, sha256, and downloaded bool:
+        for key in required_keys:
+            if key not in model_data:
+                return False
+    return True
 
 
 def calculate_hash(file_path: Path) -> str:

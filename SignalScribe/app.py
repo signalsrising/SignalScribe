@@ -1,60 +1,56 @@
 """Main application class for SignalScribe."""
 
 from pathlib import Path
-from pywhispercpp.model import Model
-from multiprocessing import Queue, Value, Lock
-from queue import Empty
-from time import sleep
-from rich.panel import Panel
-from rich.table import Table
 from rich.live import Live
+from rich.panel import Panel
 from rich.progress import (
     Progress,
     SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
 )
-from rich.prompt import Confirm, IntPrompt
-from .utils import logger, console, nested_dict_to_string, resolve_filepath
-from .model import ModelManager
-from .transcriber import Transcriber
-from .decoder import Decoder
-from .watcher import FolderWatcher
-from .version import __version__
-from .trackedqueue import TrackedQueue
-from .output import Output
+from rich.prompt import Confirm
+from rich.table import Table
+from time import sleep
 import threading
-import sys
+
+from .decoder import Decoder
+from .logging import logger, console
+from .model import ModelManager
+from .output import Output
 from .sdrtrunk import SDRTrunkDetector
-
-
-def _cleanup_old_logs(log_dir: Path, keep_last: int = 10) -> None:
-    """Keep only the N most recent log files in the directory."""
-    log_files = sorted(
-        log_dir.glob("signalscribe_*.log"),
-        key=lambda x: x.stat().st_mtime,
-        reverse=True,
-    )
-
-    # Remove old files
-    for old_log in log_files[keep_last:]:
-        try:
-            old_log.unlink()
-        except Exception as e:
-            logger.warning(f"Failed to remove old log file {old_log}: {e}")
+from .trackedqueue import TrackedQueue
+from .transcriber import Transcriber
+from .version import __version__
+from .watcher import FolderWatcher
 
 
 class SignalScribeApp:
-    """Main application class that manages all components."""
+    """Main application class that manages all pretty much everything apart from setting up logging."""
+
+    @property
+    def csv_filepath(self) -> Path:
+        return self._csv_filepath
+
+    @property
+    def log_file_path(self) -> Path:
+        return self._log_file_path
+
+    @log_file_path.setter
+    def log_file_path(self, file_path: Path):
+        self._log_file_path = file_path
+        logger.debug(f"Set log file path to {self._log_file_path}")
 
     def __init__(self, args):
         """Initialize the application with command line arguments."""
         self.args = args  # Command line arguments set by user
-        self.monitoring_sdrtrunk = False # Is app automatically monitoring SDRTrunk?
+        self.monitoring_sdrtrunk = False  # Is app automatically monitoring SDRTrunk?
 
         # Shared state between components
         self.shared_colors = {}  # Dictionary to share colors between watcher and output
-        self.shared_colors_lock = threading.Lock()  # Lock to protect access to shared_colors
+        self.shared_colors_lock = (
+            threading.Lock()
+        )  # Lock to protect access to shared_colors
 
         # Threads:
         self.model_manager = None  # Checks for models and downloads them if needed
@@ -66,29 +62,119 @@ class SignalScribeApp:
         # Rich live display
         self.live_display = None  # Displays length of the queues
 
-    def start(self) -> bool:
-        """Initialize all components."""
-        self.print_banner()
+    def setup(self) -> None:
+        """Sets up the app to run, inlcuding:
+        - Printing the banner
+        - Setting up the recording folder
+        - Initializing the model manager
+        - Resolving the CSV and log file paths
+        - Choosing which model to use
+        """
+        self._print_banner()
+
+        self._set_up_recording_folder()
+
+        # Initialize model management - checks for required models and downloads them if needed
+        model_dir = self.args.model_dir if hasattr(self.args, "model_dir") else None
+        self.model_manager = ModelManager(model_dir, self.args.list_models)
+
+        # Resolve file paths
+        self._csv_filepath = self._resolve_csv_filepath()
+        self._log_file_path = self._resolve_log_filepath()
+
+        # Log the resolved paths
+        logger.info(f"Using CSV file: {self._csv_filepath}")
+        logger.info(f"Using log file: {self._log_file_path}")
+
+        # Pipeline is:
+        # FolderWatcher: Monitors for new files and if they are audio files adds
+        #                them to decoding queue
+        # Decoder:       Monitors decoding queue and any files in it are converted
+        #                to raw numpy array then placed in transcribing queue.
+        # Transcriber:   Monitors transcribing queue and transcribes any audio data
+        #                into text which is then placed on output queue.
+        # Output:        Prints transcriptions in the output queue to screen and
+        #                saves them to disk. In future can do more with the texts.
+
+        # Initialize queues for passing data between stages of the transcription pipeline
+        self.decoding_queue = TrackedQueue(name="Decoding")
+        self.transcribing_queue = TrackedQueue(name="Transcribing")
+        self.output_queue = TrackedQueue(name="Output")
+
+        # Initialize watcher - watches for new files in the folder and adds them to the decoding queue
+        self.watcher = FolderWatcher(
+            queue=self.decoding_queue,
+            folder=self.args.folder,
+            formats=self.args.formats,
+            shared_colors=self.shared_colors,
+            shared_colors_lock=self.shared_colors_lock,
+            recursive=self.args.recursive,
+            # polling=self.args.polling,
+            # polling_interval=self.args.polling_interval,
+        )
+
+        # Initialize decoder - decodes audio files and adds them to the transcribing queue
+        self.decoder = Decoder(
+            decoding_queue=self.decoding_queue,
+            transcribing_queue=self.transcribing_queue,
+        )
+
+        # Initialize transcriber - the transcriber manages its own worker process internally
+        # Pass our shared counter tuple (counter, lock) to track completed transcriptions
+        self.transcriber = Transcriber(
+            transcribing_queue=self.transcribing_queue,
+            output_queue=self.output_queue,
+            model_name=self.args.model,
+            model_dir=self.model_manager._model_dir,
+            n_threads=self.args.threads,
+        )
+
+        # Initialize output - saves transcriptions to CSV and outputs to console
+        self.output = Output(
+            output_queue=self.output_queue,
+            csv_filepath=self.csv_filepath,
+            shared_colors=self.shared_colors,
+            shared_colors_lock=self.shared_colors_lock,
+        )
+
+        # Print table of runtime parameters, like model stats, threads etc
+        self.print_parameters()
+
+    def _set_up_recording_folder(self):
+        """
+        Set up the recording folder:
+        1. If folder is not specified, try to get SDRTrunk recording directory.
+        2. If folder is specified, check that it exists and is a directory.
+        3. If it doesn't exist, prompt the user to create it.
+        """
 
         # If folder is not specified, try to get SDRTrunk recording directory
         if not self.args.folder:
-            logger.info("No folder specified, attempting to use SDRTrunk recording directory")
+            logger.info(
+                "No folder specified, attempting to use SDRTrunk recording directory"
+            )
             detector = SDRTrunkDetector()
             recording_dir = detector.get_recording_directory()
-            
+
             if recording_dir:
                 self.args.folder = str(recording_dir)
-                logger.info(f"Monitoring SDRTrunk recording directory: {self.args.folder}")
+                logger.info(
+                    f"Monitoring SDRTrunk recording directory: {self.args.folder}"
+                )
                 self.monitoring_sdrtrunk = True
             else:
                 logger.error("Could not determine SDRTrunk recording directory")
-                console.print("[red]Error:[/red] No folder specified and could not find SDRTrunk recording directory.")
+                console.print(
+                    "[red]Error:[/red] No folder specified and could not find SDRTrunk recording directory."
+                )
                 console.print("Please either:")
                 console.print("  1. Specify a folder with --folder")
-                console.print("  2. Ensure SDRTrunk is installed and properly configured")
+                console.print(
+                    "  2. Ensure SDRTrunk is installed and properly configured"
+                )
                 console.print("     (SDRTrunk does not need to be running)")
                 return False
-            
+
         else:
             # Check that the folder exists, and if not, prompt the user to create it
             self.folder_path = Path(self.args.folder).expanduser().resolve()
@@ -124,124 +210,6 @@ class SignalScribeApp:
                     self.folder_path = parent_dir
                 else:
                     return False
-
-        # Initialize model management - checks for required models and downloads them if needed
-        model_dir = self.args.model_dir if hasattr(self.args, "model_dir") else None
-        self.model_manager = ModelManager(self.args.model_dir, self.args.list_models)
-
-        if self.args.list_models:
-            available_models = fetch_available_models()
-            console.print(f"Available models:")
-            if available_models:
-                grid = Table.grid(padding=(0, 2))
-                grid.add_column("Index", justify="left", style="blue", no_wrap=True)
-                grid.add_column("Model", justify="left", style="bold", no_wrap=True)
-                grid.add_column("Size", justify="left", style="dim", no_wrap=True)
-
-                choices = []
-
-                max_index = 0
-
-                for i, (base_name, model_info) in enumerate(available_models.items()):
-                    index = i+1
-                    max_index = index
-                    choices.append(str(index))
-                    if sys.platform == "darwin":
-                        grid.add_row(f"{index}", f"{base_name}", f"{model_info['bin_size']} (+ {model_info['coreml_size']} for CoreML)")
-                    else:
-                        grid.add_row(f"{index}", f"{base_name}", f"{model_info['bin_size']}")
-
-                console.print(grid)
-                
-                selected_index = None
-
-                while True:
-                    selected_index = IntPrompt.ask(
-                        f"\n[bold]Select which model to use[/bold] (Press CTRL+C to exit)"
-                    )
-                    if selected_index >= 1 and selected_index <= max_index:
-                        break
-                    console.print(f"[prompt.invalid]Number must be between 1 and {max_index}")
-                        
-                if selected_index:
-                    self.args.model = list(available_models.keys())[selected_index-1]
-                    console.print(f"Selected model: [bold][blue]{self.args.model}[/blue][/bold]")
-                else:
-                    console.print("[red]No model selected, quitting[/red]") # Should never happen
-                    return False
-
-
-        # Ensure model files exist
-        if not self.model_manager.ensure_models_exist():
-            logger.error(
-                "Required model files are missing. Please download them and try again."
-            )
-            return False
-
-        # Resolve file paths
-        self.csv_filepath = self._resolve_csv_filepath()
-        self.log_filepath = self._resolve_log_filepath()
-
-        # Log the resolved paths
-        logger.info(f"Using CSV file: {self.csv_filepath}")
-        logger.info(f"Using log file: {self.log_filepath}")
-
-        # Pipeline is:
-        # FolderWatcher: Monitors for new files and if they are audio files adds
-        #                them to decoding queue
-        # Decoder:       Monitors decoding queue and any files in it are converted
-        #                to raw numpy array then placed in transcribing queue.
-        # Transcriber:   Monitors transcribing queue and transcribes any audio data
-        #                into text which is then placed on output queue.
-        # Output:        Prints transcriptions in the output queue to screen and
-        #                saves them to disk. In future can do more with the texts.
-
-        # Initialize queues for passing data between stages of the transcription pipeline
-        self.decoding_queue = TrackedQueue(name="Decoding")
-        self.transcribing_queue = TrackedQueue(name="Transcribing")
-        self.output_queue = TrackedQueue(name="Output")
-
-        # Initialize watcher - watches for new files in the folder and adds them to the decoding queue
-        self.watcher = FolderWatcher(
-            queue=self.decoding_queue,
-            folder=self.args.folder,
-            formats=self.args.formats,
-            shared_colors=self.shared_colors,
-            shared_colors_lock=self.shared_colors_lock,
-            recursive=self.args.recursive,
-            # polling=self.args.polling,
-            # polling_interval=self.args.polling_interval,
-        )
-
-        # Initialize decoder - decodes audio files and adds them to the transcribing queue
-        self.decoder = Decoder(
-            decoding_queue=self.decoding_queue,
-            transcribing_queue=self.transcribing_queue,
-            silent=self.args.silent,
-        )
-
-        # Initialize transcriber - the transcriber manages its own worker process internally
-        # Pass our shared counter tuple (counter, lock) to track completed transcriptions
-        self.transcriber = Transcriber(
-            transcribing_queue=self.transcribing_queue,
-            output_queue=self.output_queue,
-            model_name=self.args.model,
-            model_dir=self.model_manager._model_dir,
-            n_threads=self.args.threads,
-        )
-
-        # Initialize output - saves transcriptions to CSV and outputs to console
-        self.output = Output(
-            output_queue=self.output_queue,
-            csv_filepath=self.csv_filepath,
-            shared_colors=self.shared_colors,
-            shared_colors_lock=self.shared_colors_lock,
-        )
-
-        # Print table of runtime parameters, like model stats, threads etc
-        self.print_parameters()
-
-        return True
 
     def _build_status_display(self):
         """Create a rich progress display for queue status."""
@@ -317,13 +285,10 @@ class SignalScribeApp:
                         )
                     else:
                         progress.update(self.transcribing_task_id, visible=False)
-                
+
                 sleep(0.1)
-                        
 
-
-
-    def print_banner(self) -> None:
+    def _print_banner(self) -> None:
         """Print the intro message."""
         console.print(
             Panel(
@@ -335,37 +300,51 @@ class SignalScribeApp:
     def print_parameters(self) -> None:
         """Print runtime parameters for the application."""
         system_info_string = "Unknown"
-        
+
         # Try to get system info from transcriber's shared dictionary
-        # Wait a short time for the transcriber process to initialize and populate the shared dict
+        # Wait a short time for the transcriber process to initialise and populate the shared dict
         max_wait = 3.0  # Maximum seconds to wait
         wait_interval = 0.1
         waited = 0
-        
+
         while waited < max_wait:
             # Check if transcriber exists and has populated the shared dict
-            if hasattr(self, 'transcriber') and self.transcriber and 'system_info' in self.transcriber.shared_dict:
-                system_info_string = self.transcriber.shared_dict['system_info']
+            if (
+                hasattr(self, "transcriber")
+                and self.transcriber
+                and "system_info" in self.transcriber.shared_dict
+            ):
+                system_info_string = self.transcriber.shared_dict["system_info"]
                 break
-            
+
             # Wait a bit and try again
             sleep(wait_interval)
             waited += wait_interval
-        
+
         grid = Table.grid(padding=(0, 2))
 
         grid.add_column(justify="right", style="yellow", no_wrap=True)
         grid.add_column()
         grid.add_column(style="dim", no_wrap=True)
 
-        grid.add_row("Model", self.args.model, "Set with --model")
+        grid.add_row("Model", self.args.model, "Set with --model or -m")
         grid.add_row("Compute", system_info_string)
-        grid.add_row("CPU Threads", f"{self.args.threads}", "Set with --threads")
-        grid.add_row("CSV File", str(self.csv_filepath), "Set with --csv-filepath, remove with --no-csv")
-        grid.add_row("Log File", str(self.log_filepath), "Set with --log-filepath, remove with --no-logs")
+        grid.add_row("CPU Threads", f"{self.args.threads}", "Set with --threads or -t")
+        grid.add_row(
+            "CSV File",
+            str(self.csv_filepath),
+            "Set with --csv-path, remove with --no-csv",
+        )
+        grid.add_row(
+            "Log File",
+            str(self.log_filepath),
+            "Set with --log-dir-path, remove with --no-logs",
+        )
 
         if self.monitoring_sdrtrunk:
-            grid.add_row("Monitoring", f"{str(self.args.folder)} [red]Autodetected from SDRTrunk[/red]")
+            grid.add_row(
+                "Monitoring", f"{str(self.args.folder)} [red](from SDRTrunk)[/red]"
+            )
         else:
             grid.add_row("Monitoring", str(self.args.folder))
 
@@ -379,22 +358,21 @@ class SignalScribeApp:
             self._build_status_display()
 
             self.watcher.run()
-            
+
             self._status_loop()
             return 0
 
         except KeyboardInterrupt:
             logger.info("Shutting down...")
-            self.shutdown()
+            self._shutdown()
             return 0
 
         except Exception as e:
-            logger.error(f"An error occurred: {e}")
-            raise e
-            self.shutdown()
+            logger.fatal(f"An error occurred: {e}")
+            self._shutdown()
             return 1
 
-    def shutdown(self) -> None:
+    def _shutdown(self) -> None:
         """Gracefully shutdown all components."""
         logger.info("Shutting down application...")
 
@@ -409,31 +387,3 @@ class SignalScribeApp:
             self.output.shutdown()
 
         logger.info("Application shutdown complete")
-
-    def _resolve_log_filepath(self) -> Path:
-        """Resolve the log filepath based on user input or defaults."""
-        return resolve_filepath(
-            provided_path=self.args.log_filepath,
-            default_dir=self._get_default_log_dir(),
-            default_name="signalscribe",
-            default_extension=".log",
-            timestamp=True,
-            keep_last_n=10,
-        )
-
-    def _get_default_log_dir(self) -> Path:
-        """Get the default log directory."""
-        return Path.home() / ".signalscribe" / "logs"
-
-    def _resolve_csv_filepath(self) -> Path:
-        """Resolve the CSV filepath based on user input or defaults."""
-        # Get the monitored folder name for default CSV naming
-        monitored_folder = Path(self.args.folder).expanduser().resolve()
-        return resolve_filepath(
-            provided_path=self.args.csv_filepath,
-            default_dir=monitored_folder,
-            default_name=monitored_folder.name,
-            default_extension=".csv",
-            timestamp=False,
-            keep_last_n=None
-        )

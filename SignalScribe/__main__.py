@@ -3,57 +3,61 @@
 # Todo list:
 # Multiprocess logging
 # Fix install on AMD64 + nVidia GPUs
-# Output thread
 
-import sys
 import os
+import sys
+from pathlib import Path
 
 # Add the parent directory to sys.path to allow relative imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from SignalScribe.utils import setup_logging, parse_args
-from SignalScribe.app import SignalScribeApp
-from SignalScribe.utils import console, logger
+from .app import SignalScribeApp
+from .logging import logger, setup_logging, log_name
+from .utils import parse_args
 
 
 def main():
     """Main entry point for the application."""
     args = parse_args()
 
-    # Create and initialize application
-    app = SignalScribeApp(args)
-
+    # Create and initialise application
     try:
-        # Set up logging before any other initialization
-        log_filepath = (
-            str(app._resolve_log_filepath())
-            if hasattr(app, "_resolve_log_filepath")
-            else None
-        )
+        app = SignalScribeApp(args)
+
+        if args.verbose:
+            print(f"Parsed arguments: {args}")
+
+    except Exception as e:
+        print(f"Error initialising SignalScribe: {str(e)}")
+        return 1
+
+    # With the app initialised, set up logging and run the application:
+    try:
+        # Set up logging before setting up the app and running
+        app.log_file_path = Path(args.log_dir) / log_name()
 
         setup_logging(
-            verbose=args.verbose, log_filepath=log_filepath, log_level=args.log_level
+            log_file_path=app.log_file_path, verbose=args.verbose, silent=args.silent
         )
 
-        logger.debug(f"Parsed arguments: {args}")
+        logger.debug(f"Logging setup complete")
 
-        if not app.start():
-            return 1
-
-        # Run the application
-        return app.run()
-
-    # Handle Ctrl-C to cleanly exit the application:
-    except KeyboardInterrupt:
-        if not args.silent:
-            console.print("[red]SignalScribe interrupted by user. Exiting...")
-        return 0
-    # Handle all other exceptions:
     except Exception as e:
-        logger.error(f"Unhandled exception: {e}")
-        console.print(f"[red]An error occurred: {e}")
-        raise e
+        print(f"Error setting up logging: {str(e)}")
         return 1
+
+    # Set up the application (initialise threads, processes, etc)
+    try:
+        app.setup()
+        logger.debug(f"Application setup complete")
+    except Exception as e:
+        print(f"Error setting up application: {str(e)}")
+        return 1
+
+    # Run the application
+    # No need to catch exceptions here, as the app handles them
+    # in order to deal with graceful shutdowns
+    return app.run()
 
 
 if __name__ == "__main__":
