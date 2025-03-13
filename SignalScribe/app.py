@@ -127,10 +127,10 @@ class SignalScribeApp:
 
         # Initialize model management - checks for required models and downloads them if needed
         model_dir = self.args.model_dir if hasattr(self.args, "model_dir") else None
-        self.model_manager = ModelManager(self.args.model, model_dir)
+        self.model_manager = ModelManager(self.args.model_dir, self.args.list_models)
 
         if self.args.list_models:
-            available_models = self.model_manager.get_available_models()
+            available_models = fetch_available_models()
             console.print(f"Available models:")
             if available_models:
                 grid = Table.grid(padding=(0, 2))
@@ -226,7 +226,7 @@ class SignalScribeApp:
             transcribing_queue=self.transcribing_queue,
             output_queue=self.output_queue,
             model_name=self.args.model,
-            model_dir=self.model_manager.model_dir,
+            model_dir=self.model_manager._model_dir,
             n_threads=self.args.threads,
         )
 

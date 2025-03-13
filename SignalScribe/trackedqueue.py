@@ -1,5 +1,6 @@
 from multiprocessing import Queue, Value, Lock
 
+
 class TrackedQueue:
     """A queue wrapper that tracks its own size using shared memory."""
 
@@ -19,7 +20,7 @@ class TrackedQueue:
 
     def get(self, block=True, timeout=None):
         """Get an item from the queue and decrement the size counter."""
-        
+
         item = self.queue.get(block=block, timeout=timeout)
 
         with self._mp_lock:

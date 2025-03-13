@@ -16,6 +16,7 @@ Only way round it for now is to run it in a separate process,
 which is implemented here.
 """
 
+
 # Am defining the worker function outside of any class to avoid a pickling issue
 # maybe can be inside the class but idk. works for now
 def transcriber_worker(
@@ -149,7 +150,6 @@ class Transcriber:
         )
         self.worker_process.start()
         logger.info("Transcriber worker process started")
-
 
     def shutdown(self) -> None:
         logger.info("Shutting down transcriber...")

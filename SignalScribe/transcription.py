@@ -2,6 +2,7 @@ from datetime import datetime
 import numpy as np
 import os
 
+
 class Transcription:
     """Represents a single transcription task that can be passed between processes."""
 

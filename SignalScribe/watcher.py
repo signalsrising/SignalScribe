@@ -23,7 +23,7 @@ class FolderWatcher:
         folder: str,
         formats: list,
         shared_colors: dict = None,  # Shared colors dictionary
-        shared_colors_lock = None,   # Lock for the shared colors dictionary
+        shared_colors_lock=None,  # Lock for the shared colors dictionary
         recursive: bool = False,
         polling: bool = True,
         polling_interval: int = POLLING_INTERVAL,
@@ -88,7 +88,14 @@ class FolderWatcher:
 class FolderWatcherHandler(PatternMatchingEventHandler):
     """Handles file system events for the folder watcher, acting as a producer."""
 
-    def __init__(self, queue: Queue, folder: str, formats: list, shared_colors: dict = None, shared_colors_lock = None):
+    def __init__(
+        self,
+        queue: Queue,
+        folder: str,
+        formats: list,
+        shared_colors: dict = None,
+        shared_colors_lock=None,
+    ):
         """Initialize the event handler."""
         self.queue = queue
         self.folder = folder
@@ -139,7 +146,7 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
 
         if valid_colors and valid_colors != self.colors:
             self.colors = valid_colors
-            
+
             # Update the shared colors dictionary with lock protection
             if self.shared_colors is not None:
                 if self.shared_colors_lock:
@@ -149,7 +156,7 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
                 else:
                     self.shared_colors.clear()
                     self.shared_colors.update(valid_colors)
-                    
+
             logger.info(f"Updated highlight settings from: {colors_file_path}")
 
     def on_created(self, event: FileSystemEvent) -> None:
