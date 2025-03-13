@@ -76,7 +76,7 @@ class SDRTrunkDetector:
 
             logger.warning(f"SDRTrunk running but cannot find open log file.")
             logger.debug(
-                f"Open files: {", ".join([openfile.path for openfile in proc.open_files()])}"
+                f"Open files: {', '.join([openfile.path for openfile in proc.open_files()])}"
             )
         return None
 
