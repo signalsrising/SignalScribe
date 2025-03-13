@@ -1,37 +1,110 @@
-# Signals Rising SignalScribe
+# SignalScribe by Signals Rising
 signalscribe@signalsrising.org
 
-Version 0.6
-Please do not distribute this software. After a period of closed beta testing it will be released under the GPL Affero licence.
+**Version 0.7.1** 2025-02-25
 
-SignalScribe makes used of recordings output by SDRTrunk and similar SDR-based digital radios by monitoring for new recordings in a folder and transcribing them using OpenAI's Whisper model.
+SignalScribe makes use of recordings output by SDRTrunk and similar SDR-based digital radios by monitoring a folder for new recordings and transcribing them using OpenAI's Whisper model.
 
 Transcriptions are logged to a CSV file named the same as the monitored folder.
 The CSV is also stored in the same folder as the recordings.
 
-## Installation
+## Installation using pip via pipy.org
 
-To install, run `./install.sh`.
-This will install the Python dependencies and download the GGML model (and Apple Neural Engine model if required) to ./models/
-These models are between 1 and 2GiB in size so may take a while to download.
+Simply run:
 
-You can provide the name of a particular verison of Python to use with the `--python-version` option, e.g. `./install.sh --python-version python3.11`.
-By default it will just try to use 'python3'.
+```
+pip install signalscribe
+```
 
-The script attempts to detect whether you have Apple Silicon or a CUDA-enabled GPU and will install the appropriate libraries and models.
+Setup will try to automatically detect your hardware and install the appropriate acceleration.
 
-For now only recent versions of MacOS and Ubuntu(-based) Linux are supported. Other operating systems may work but we can't make any guarantees.
+- For hardware acceleration to work, you need to have the necessary drivers and libraries installed. For nVidia GPUs, hardware acceleration is provided via CUDA. Visit [https://developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads).
+
+- For AMD or Intel based GPUs, hardware acceleration can be provided by Vulkan. Visit [https://vulkan.lunarg.com/sdk/home](https://vulkan.lunarg.com/sdk/home).
+
+For Apple Silicon, hardware acceleration is provided by CoreML automatically.
+
+### Manual hardware API selection
+
+If you want to choose a specific acceleration method:
+
+- NVIDIA GPU with CUDA:
+  ```
+  pip install "signalscribe[cuda]"
+  ```
+
+- AMD/Intel GPU with Vulkan:
+  ```
+  pip install "signalscribe[vulkan]"
+  ```
+
+- Apple Silicon with Neural Engine:
+  ```
+  pip install "signalscribe[coreml]"
+  ```
+
+- CPU only (for compatibility):
+  ```
+  pip install "signalscribe[cpu]"
+  ```
+
+## Installation from source
+
+```
+git clone https://github.com/signalsrising/signalscribe.git
+cd signalscribe
+pip install -e .
+```
 
 ## Running
 
-To run, run `./python3 signalscribe.py <path_to_folder_with_recordings>`.
-To stop, press Ctrl+C.
-For help, run `./python3 signalscribe.py --help`.
+To run:
 
-(N.b. You must use the same version of Python that you used to install the dependencies.)
+`$ signalscribe <path_to_folder_with_recordings>`.
+
+To stop, press Ctrl+C.
+
+For help:
+
+`$ signalscribe --help`
 
 ## Colors
 
-If you place a file named `colors.yaml` in the same folder as the recordings, it will be used to highlight the transcriptions in the console.
-An example `colors.yaml` file is provided with this file.
+If you place a file named `colors.yaml` in the same folder as the recordings, it will be used to highlight the transcriptions in the console. Example color.yaml file:
 
+
+```
+green:
+- one
+- two
+- three
+
+red:
+- four
+- five six seven
+- 8
+- 9 10
+
+yellow:
+- ELEVEN
+
+purple:
+- 12
+- ThirtEEN
+
+blue:
+- one
+- two
+- three
+```
+
+Highlights take precedence the higher up in a file they are.
+For instance 'one' will be highlighted green, despite the fact that it's also included under 'blue:', because green comes higher up in the file than blue.
+
+Highlighting is case insensitive, so Thirteen, THIRTEEN and thirteen will all be highlighted purple according to this example
+
+Highlighting happens by phrase, rather than by word. So 'five six seven' will be highlighted only if all 3 words occur together
+
+Supported color names can be found here: https://rich.readthedocs.io/en/stable/appendix/colors.html
+
+This colors file can be updated at any time while SignalScribe is running and the changes will be reflected in future console output.

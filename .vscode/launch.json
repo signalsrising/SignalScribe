@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "SignalScribe",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "SignalScribe",
+            "justMyCode": false,
+            "args": [
+                // "-V",
+                "--recursive",
+                "~/Development/Audio"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ]
+} 

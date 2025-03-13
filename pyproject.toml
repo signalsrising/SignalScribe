@@ -3,19 +3,21 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "signalscribe"
-version = "0.7.0"
+name = "SignalScribe"
+dynamic = ["version"]
 description = "A tool for transcribing and processing audio signals"
 readme = "README.md"
 authors = [{ name = "Signals Rising" }]
 license = { file = "LICENSE" }
 classifiers = [
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 keywords = ["audio", "transcription", "signal-processing"]
 dependencies = [
@@ -28,13 +30,21 @@ requires-python = ">=3.8"
 
 [project.optional-dependencies]
 dev = ["black", "pytest"]
+auto = []  # Will trigger automatic detection
+cuda = []  # For manual CUDA selection
+vulkan = []  # For manual Vulkan selection
+coreml = []  # For manual CoreML selection
+cpu = []  # CPU-only version - pywhispercpp is now in main dependencies
 
 [project.urls]
 Homepage = "https://github.com/SignalsRising/SignalScribe"
 "Bug Tracker" = "https://github.com/SignalsRising/SignalScribe/issues"
 
-[project.scripts]
-signalscribe = "SignalScribe.SignalScribe:main"
-
 [tool.setuptools]
 packages = ["SignalScribe"] 
+
+[project.scripts]
+signalscribe = "SignalScribe.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "SignalScribe.version.__version__"}
