@@ -23,7 +23,7 @@ def log_name() -> str:
 
     # Logs are in the format: signalscribe-<date>-<time>.log
     # We use ISO style of YYYYMMDD as a compromise between human-readable and American formats
-    return f"{LOG_NAME}-{datetime.now().strftime("%Y%m%d_%H%M%S")}.log"
+    return f"{LOG_NAME}-{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
 
 def setup_logging(
