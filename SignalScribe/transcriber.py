@@ -1,103 +1,109 @@
-"""Transcription handling for SignalScribe."""
-
-import os
-import sys
-from datetime import datetime
+from multiprocessing import Process, Queue, Manager, Event
+from pywhispercpp.model import Model
+from queue import Empty
+import logging
 import time
-from queue import Empty  # Keep using this for exception handling
-from threading import Thread, Event
-from multiprocessing import Process, Queue, Value, Lock
-import csv
-import numpy as np
-from pywhispercpp.model import Model, utils
-from .utils import logger, console, APP_NAME, MODEL_CHOICES, DEFAULT_MODEL
+
 from .transcription import Transcription
+from .utils import logger, console, APP_NAME, MODEL_CHOICES, DEFAULT_MODEL
+from logging import Logger
 
+"""
+Whisper seems to lock the GIL while transcribing so even if its
+not in the main python thread it blocks the main thread and prevents
+things like decoding and status updates from happening.
+Only way round it for now is to run it in a separate process,
+which is implemented here.
+"""
 
-# Define the worker function outside of any class to avoid pickling issues
-def transcriber_worker(model_name, model_dir, n_threads, task_queue, result_queue, 
-                      csv_filepath, silent, print_progress):
+# Am defining the worker function outside of any class to avoid a pickling issue
+# maybe can be inside the class but idk. works for now
+def transcriber_worker(
+    model_name: str,
+    model_dir: str,
+    n_threads: int,
+    task_queue: Queue,
+    output_queue: Queue,
+    shared_dict,
+    logger: logging.Logger = None,
+):
     """Worker process function that runs transcription tasks."""
-    try:
-        # Load the model in this process
-        model = Model(
-            model=model_name,
-            models_dir=model_dir,
-            n_threads=n_threads,
-            print_progress=print_progress,
-            print_timestamps=False,
-        )
-        logger.info(f"Loaded {model_name} model in worker process")
-        
-        # Ensure CSV file exists
-        csv_filepath = os.path.abspath(csv_filepath)
-        if not os.path.exists(csv_filepath):
-            with open(csv_filepath, "w", newline="", encoding="utf-8") as csv_file:
-                writer = csv.writer(csv_file)
-                writer.writerow(["Timestamp", "File Path", "Duration", "Transcription"])
-        
-        # Process tasks until None sentinel is received
-        while True:
-            try:
-                # Get the next task with a timeout to keep the process responsive
-                transcription = task_queue.get(timeout=0.5)
-                
-                # Check for None sentinel (shutdown signal)
-                if transcription is None:
-                    logger.info("Transcriber process received shutdown sentinel")
-                    break
-                
-                logger.debug(f"Transcriber process got audio data for {transcription.filepath}")
-                
-                # Process the audio
-                process_task(transcription, model, result_queue, csv_filepath, silent)
-                
-                logger.debug(f"Transcriber process completed transcription for {transcription.filepath}")
-                
-            except Empty:
-                continue  # No tasks available, just keep checking
-            except Exception as e:
-                logger.error(f"Error transcribing audio data: {e}")
-    
-    except Exception as e:
-        logger.error(f"Error in transcriber worker process: {e}")
-        sys.exit(1)
 
+    # if not logger:
+    logger = logging.getLogger("transcriber_process")
 
-def process_task(transcription, model, result_queue, csv_filepath, silent):
-    """Process a single transcription task."""
-    start_time = time.monotonic()
-    logger.info(f"Processing transcription for {transcription.filepath}")
+    logger.info(f"Loading {model_name} model in worker process")
+    # Load the model actually in this process
+    model = Model(
+        model=model_name,
+        models_dir=model_dir,
+        n_threads=n_threads,
+        print_progress=False,
+        print_timestamps=False,
+        redirect_whispercpp_logs_to=None,
+    )
+    logger.info(f"Loaded {model_name} model in worker process")
 
-    try:
-        # Use the decoded audio data for transcription
-        segments = model.transcribe(transcription.audio, print_progress=False)
+    # Get system info and store it in the shared dictionary
+    system_info = model.system_info()
 
-        text = "".join(segment.text for segment in segments).strip()
-        duration = time.monotonic() - start_time
+    # Parse enabled features
+    enabled_features = {
+        part.split("=")[0].strip()
+        for part in system_info.split("|")
+        if part.split("=")[1].strip() == "1"
+    }
+    if enabled_features:
+        system_info_string = ", ".join(enabled_features)
+        shared_dict["system_info"] = system_info_string
 
-        # Save to CSV
-        with open(csv_filepath, "a", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow(
-                [
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    transcription.filepath,
-                    f"{duration:.2f}",
-                    text,
-                ]
+    # Process tasks until None sentinel is received
+    logger.info("Transcriber process started")
+    while True:
+        try:
+            # Get the next task with a timeout to keep the process responsive
+            transcription = task_queue.get(timeout=0.5)
+
+            # Check for None sentinel (shutdown signal)
+            if transcription is None:
+                logger.info("Transcriber process received shutdown sentinel")
+                break
+
+            logger.debug(
+                f"Transcriber process got audio data for {transcription.filepath}"
             )
 
-        # Add the result to the result queue
-        result_queue.put((transcription.filepath, text))
-        
-        logger.info(f"Completed transcription of {transcription.filepath} in {duration:.2f}s")
-        return text
+            # Process the audio
+            transcription = transcribe_audio(transcription, model)
 
-    except Exception as e:
-        error_msg = f"Failed to transcribe {transcription.filepath}: {e}"
-        logger.error(error_msg)
-        return None
+            # Add the result to the result queue
+            output_queue.put(transcription)
+
+            logger.debug(
+                f"Transcriber process completed transcription for {transcription.filepath}"
+            )
+
+        except Empty:
+            continue  # No tasks available, just keep checking
+        except Exception as e:
+            logger.error(f"Error transcribing audio data: {e}")
+
+
+def transcribe_audio(
+    transcription: Transcription,
+    model: Model,
+) -> Transcription:
+    """Process a single transcription task."""
+    # Clock to time how long each transcription takes
+    start_time = time.monotonic()
+
+    # Use the decoded audio data for transcription
+    segments = model.transcribe(transcription.audio, print_progress=False)
+
+    transcription.text = "".join(segment.text for segment in segments).strip()
+    transcription.duration = time.monotonic() - start_time
+
+    return transcription
 
 
 class Transcriber:
@@ -105,32 +111,29 @@ class Transcriber:
 
     def __init__(
         self,
-        task_queue,  # multiprocessing.Queue
+        transcribing_queue,  # multiprocessing.Queue
+        output_queue,  # multiprocessing.Queue
         model_name: str,
         model_dir: str,
         n_threads: int,
-        csv_filepath: str,
         silent: bool = False,
-        print_progress: bool = False,
-        completed_counter = None  # Optional shared counter
     ):
         """Initialize the transcriber with the specified model and settings."""
-        self.task_queue = task_queue
-        self.result_queue = Queue()  # multiprocessing queue for results
-        
+        self.transcribing_queue = transcribing_queue
+        self.output_queue = output_queue
+
         self.stop_event = Event()  # This is only used in the main process
         self.silent = silent
-        
+
         # Save these for the process
         self.model_name = model_name
         self.model_dir = model_dir
         self.n_threads = n_threads
-        self.csv_filepath = csv_filepath
-        self.print_progress = print_progress
-        
-        # Use the shared completed counter if provided
-        self.completed_counter = completed_counter
-        
+
+        # Create a manager for shared objects
+        self.manager = Manager()
+        self.shared_dict = self.manager.dict()
+
         # Start worker process
         self.worker_process = Process(
             target=transcriber_worker,
@@ -138,83 +141,36 @@ class Transcriber:
                 model_name,
                 model_dir,
                 n_threads,
-                task_queue,
-                self.result_queue,
-                csv_filepath,
-                silent,
-                print_progress,
+                transcribing_queue,
+                self.output_queue,
+                self.shared_dict,  # Pass the shared dictionary
             ),
             daemon=True,
         )
         self.worker_process.start()
         logger.info("Transcriber worker process started")
-        
-        # Start a thread in the main process to handle results from the worker
-        self.result_thread = Thread(
-            target=self._handle_results,
-            daemon=True,
-        )
-        self.result_thread.start()
-        logger.info("Result handling thread started")
 
-    def add_task(self, task: Transcription) -> None:
-        """Add a transcription task to the queue."""
-        if self.worker_process.is_alive():
-            logger.debug(f"Adding transcription task for {task.filepath} to queue")
-            try:
-                # Add the task to the multiprocessing queue
-                self.task_queue.put(task)
-                logger.debug(f"Added transcription task for {task.filepath}")
-            except Exception as e:
-                logger.error(f"Error adding task to transcriber queue: {e}")
-                if not self.silent:
-                    console.print(f"[red]Error adding task to transcriber queue: {e}")
-        else:
-            logger.warning(f"Cannot add task: worker process is not running")
-
-    def _handle_results(self) -> None:
-        """Handle results coming back from the worker process."""
-        while not self.stop_event.is_set():
-            try:
-                # Get result from queue with a short timeout
-                result = self.result_queue.get(timeout=0.5)
-                if result:
-                    filepath, text = result
-                    # Update completion counter if provided
-                    if self.completed_counter is not None:
-                        with self.completed_counter[1]:  # Use the lock
-                            self.completed_counter[0].value += 1  # Increment the counter
-                            
-                    logger.info(f"Completed transcription of {filepath}")
-
-            except Empty:
-                continue  # No results available, check stop_event again
-            except Exception as e:
-                logger.error(f"Error handling transcription result: {e}")
 
     def shutdown(self) -> None:
-        """Gracefully shutdown the transcriber."""
         logger.info("Shutting down transcriber...")
         self.stop_event.set()
-        
-        # Send None sentinel to signal the worker process to stop
-        try:
-            self.task_queue.put(None)
-            logger.info("Sent shutdown sentinel to transcriber process")
-        except Exception as e:
-            logger.warning(f"Failed to send shutdown sentinel to transcriber process: {e}")
 
-        # Wait for result thread to finish
-        self.result_thread.join(timeout=5.0)
+        # Send None sentinel to signal the worker process to stop
+        self.transcribing_queue.put(None)
+        logger.debug("Sent shutdown sentinel to transcriber process")
+
+        max_wait_time = 10.0
 
         # Terminate the worker process if it's still running
-        if self.worker_process.is_alive():
+        while self.worker_process.is_alive():
             # Give it a moment to shut down gracefully
-            import time
-            time.sleep(1.0)
-            
-            if self.worker_process.is_alive():
+            time.sleep(0.1)
+            max_wait_time -= 0.1
+
+            if max_wait_time <= 0:
+                logger.warning("Worker process did not terminate in time")
                 self.worker_process.terminate()
                 logger.info("Terminated transcriber worker process")
+                break
 
         logger.info("Transcriber shutdown complete")

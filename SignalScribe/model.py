@@ -1,5 +1,3 @@
-"""Model management for SignalScribe."""
-
 import hashlib
 import platform
 import requests

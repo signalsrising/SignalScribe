@@ -1,5 +1,3 @@
-"""Audio decoding functionality for SignalScribe."""
-
 import os
 import time
 import shutil
@@ -19,13 +17,14 @@ class Decoder:
     """Decodes audio files into numpy arrays, acting as a middle component between watcher and transcriber."""
 
     def __init__(
-        self, decoding_queue, transcribing_queue, silent: bool = False, 
-        file_processed_callback=None
+        self,
+        decoding_queue,
+        transcribing_queue,
+        silent: bool = False,
     ):
         """Initialize the decoder with the specified settings."""
         self.stop_event = Event()
         self.silent = silent
-        self.file_processed_callback = file_processed_callback
 
         # Start consumer thread
         self.decoder_thread = Thread(
@@ -36,45 +35,47 @@ class Decoder:
         self.decoder_thread.start()
         logger.info("Decoder thread started")
 
-    def _decode_loop(self, decoding_queue, transcribing_queue, stop_event: Event) -> None:
-        """Consume tasks from the queue until stopped."""
+    def _decode_loop(
+        self, decoding_queue, transcribing_queue, stop_event: Event
+    ) -> None:
+        """Decode audio files from the queue until stopped."""
         while not stop_event.is_set():
             try:
                 logger.debug(f"Decoder thread waiting for task")
                 # Use shorter timeout to check stop_event more frequently
                 transcription = decoding_queue.get(timeout=0.5)
-                
+
                 # Process the file if we're not stopping
                 if not stop_event.is_set():
-                    logger.debug(f"Decoder thread got task for {transcription.filepath}")
+                    logger.debug(
+                        f"Decoder thread got task for {transcription.filepath}"
+                    )
                     start_time = time.monotonic()
                     logger.info(f"Decoding audio for {transcription.filepath}")
-                    
+
                     try:
                         # Decode the audio file
                         audio_data = self._load_audio(transcription.filepath)
-                        
+
                         # Update the transcription object with the audio data
                         transcription.audio = audio_data
-                        
+
                         # Pass to transcriber queue
                         if not stop_event.is_set():
                             transcribing_queue.put(transcription)
-                            
+
                             # Log completion
                             duration = time.monotonic() - start_time
-                            logger.info(f"Completed decoding of {transcription.filepath} in {duration:.2f}s")
-                            
-                            # Call callback if provided
-                            if self.file_processed_callback:
-                                self.file_processed_callback()
-                                
+                            logger.info(
+                                f"Completed decoding of {transcription.filepath} in {duration:.2f}s"
+                            )
+
                     except Exception as e:
                         error_msg = f"Failed to decode {transcription.filepath}: {e}"
                         logger.error(error_msg)
                         if not self.silent:
                             console.print(f"[red]{error_msg}")
-            
+
             except Empty:
                 continue  # No files available to decode
             except Exception as e:
@@ -85,6 +86,7 @@ class Decoder:
         """
         Helper method to return a `np.array` object from a media file
         If the media file is not a WAV file, it will try to convert it using ffmpeg
+        via a temporary file.
 
         :param media_file_path: Path of the media file
         :return: Numpy array
@@ -131,7 +133,6 @@ class Decoder:
                 os.remove(temp_file_path)
 
     def shutdown(self) -> None:
-        """Gracefully shutdown the decoder."""
         logger.info("Shutting down decoder...")
         self.stop_event.set()
 

@@ -22,6 +22,8 @@ class FolderWatcher:
         queue: Queue,
         folder: str,
         formats: list,
+        shared_colors: dict = None,  # Shared colors dictionary
+        shared_colors_lock = None,   # Lock for the shared colors dictionary
         recursive: bool = False,
         polling: bool = True,
         polling_interval: int = POLLING_INTERVAL,
@@ -31,6 +33,8 @@ class FolderWatcher:
         :param queue: Queue between watcher and decoder
         :param folder: Folder to watch (full or relative path)
         :param formats: List of formats to watch for
+        :param shared_colors: Dictionary to share colors between components
+        :param shared_colors_lock: Lock to protect access to shared_colors
         :param recursive: Whether to watch the folder recursively (i.e. also watch all its subfolders)
         :param polling: Whether to use polling observer - user can force this if inotify observer is not working (e.g. on network drives)
         :param polling_interval: Polling interval in seconds when using polling observer
@@ -41,6 +45,8 @@ class FolderWatcher:
         self.recursive = recursive
         self.polling = polling
         self.polling_interval = polling_interval
+        self.shared_colors = shared_colors if shared_colors is not None else {}
+        self.shared_colors_lock = shared_colors_lock
 
         try:
             if not self.polling:
@@ -59,6 +65,8 @@ class FolderWatcher:
             queue=self.queue,
             folder=self.folder,
             formats=self.formats,
+            shared_colors=self.shared_colors,
+            shared_colors_lock=self.shared_colors_lock,
         )
 
         self.observer.schedule(
@@ -80,10 +88,12 @@ class FolderWatcher:
 class FolderWatcherHandler(PatternMatchingEventHandler):
     """Handles file system events for the folder watcher, acting as a producer."""
 
-    def __init__(self, queue: Queue, folder: str, formats: list):
+    def __init__(self, queue: Queue, folder: str, formats: list, shared_colors: dict = None, shared_colors_lock = None):
         """Initialize the event handler."""
         self.queue = queue
         self.folder = folder
+        self.shared_colors = shared_colors if shared_colors is not None else {}
+        self.shared_colors_lock = shared_colors_lock
 
         # Create patterns for watchdog
         patterns = ["*." + fmt for fmt in formats]
@@ -129,20 +139,31 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
 
         if valid_colors and valid_colors != self.colors:
             self.colors = valid_colors
+            
+            # Update the shared colors dictionary with lock protection
+            if self.shared_colors is not None:
+                if self.shared_colors_lock:
+                    with self.shared_colors_lock:
+                        self.shared_colors.clear()
+                        self.shared_colors.update(valid_colors)
+                else:
+                    self.shared_colors.clear()
+                    self.shared_colors.update(valid_colors)
+                    
             logger.info(f"Updated highlight settings from: {colors_file_path}")
 
     def on_created(self, event: FileSystemEvent) -> None:
         """Handle file creation events by producing decoding tasks."""
-        file_path = event.src_path  # Full path to the new file
-        file_name = os.path.basename(file_path)  # Name of the new file
+        filepath = event.src_path  # Full path to the new file
+        filename = os.path.basename(filepath)  # Name of the new file
 
-        if file_name == COLORS_SETTINGS_NAME:
-            self._update_colors(file_path)
+        if filename == COLORS_SETTINGS_NAME:
+            self._update_colors(filepath)
             return
 
         # Produce a new decoding task
-        logger.info(f"New audio file detected: {file_path}")
-        self.queue.put(Transcription(file_path))
+        logger.info(f"New audio file detected: {filepath}")
+        self.queue.put(Transcription(filepath))
 
     def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification events."""
