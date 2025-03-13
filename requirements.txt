@@ -1,0 +1,3 @@
+watchdog
+faster-whisper
+rich
