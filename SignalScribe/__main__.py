@@ -1,5 +1,11 @@
 """Main entry point for SignalScribe."""
 
+# Todo list:
+# New thread to handle conversion of audio files to np.array ('injest')
+# Use rich.progress style to show status of detected file, injest and transcription
+# Fix install on AMD64 + nVidia GPUs
+#
+
 import sys
 import os
 

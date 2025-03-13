@@ -1,28 +1,66 @@
-"""File system watching functionality for SignalScribe."""
-
+from queue import Queue
+from watchdog.events import FileSystemEvent, PatternMatchingEventHandler
+from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
+from yaml import YAMLError, SafeLoader
 import os
+import rich.color
 import time
 import yaml
-from yaml import YAMLError, SafeLoader
-import rich.color
-from watchdog.observers.polling import PollingObserver
-from watchdog.events import FileSystemEvent, PatternMatchingEventHandler
+
+from .transcription import Transcription
 from .utils import logger, console, COLORS_SETTINGS_NAME
-from .transcriber import Transcriber
+
+POLLING_INTERVAL = 10
 
 
 class FolderWatcher:
     """Watches a folder for new audio files."""
 
-    def __init__(self, folder: str, formats: list, recursive: bool = False):
-        """Initialize the folder watcher."""
+    def __init__(
+        self,
+        queue: Queue,
+        folder: str,
+        formats: list,
+        recursive: bool = False,
+        polling: bool = True,
+        polling_interval: int = POLLING_INTERVAL,
+    ):
+        """Initialize the folder watcher
+
+        :param queue: Queue between watcher and decoder
+        :param folder: Folder to watch (full or relative path)
+        :param formats: List of formats to watch for
+        :param recursive: Whether to watch the folder recursively (i.e. also watch all its subfolders)
+        :param polling: Whether to use polling observer - user can force this if inotify observer is not working (e.g. on network drives)
+        :param polling_interval: Polling interval in seconds when using polling observer
+        """
+        self.queue = queue
         self.folder = folder
         self.formats = formats
         self.recursive = recursive
-        self.observer = PollingObserver(timeout=10)
+        self.polling = polling
+        self.polling_interval = polling_interval
 
-    def run(self, handler):
+        try:
+            if not self.polling:
+                self.observer = Observer()
+                return
+        except Exception as e:
+            logger.warning(f"Error initializing observer: {e}")
+            self.polling = True
+
+        self.observer = PollingObserver(timeout=self.polling_interval)
+
+    def run(self):
         """Start watching the folder with the specified handler."""
+
+        handler = FolderWatcherHandler(
+            queue=self.queue,
+            folder=self.folder,
+            formats=self.formats,
+        )
+
         self.observer.schedule(
             event_handler=handler, path=self.folder, recursive=self.recursive
         )
@@ -31,7 +69,7 @@ class FolderWatcher:
 
         try:
             while True:
-                time.sleep(5)
+                time.sleep(self.polling_interval)
         except KeyboardInterrupt:
             logger.info("Stopping folder watcher...")
             self.observer.stop()
@@ -42,9 +80,9 @@ class FolderWatcher:
 class FolderWatcherHandler(PatternMatchingEventHandler):
     """Handles file system events for the folder watcher, acting as a producer."""
 
-    def __init__(self, folder: str, formats: list, transcriber: Transcriber):
+    def __init__(self, queue: Queue, folder: str, formats: list):
         """Initialize the event handler."""
-        self.transcriber = transcriber
+        self.queue = queue
         self.folder = folder
 
         # Create patterns for watchdog
@@ -71,6 +109,8 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         if not os.path.exists(colors_file_path):
             return
 
+        logger.debug(f"Updating colors from: {colors_file_path}")
+
         try:
             with open(colors_file_path, "r") as colors_file:
                 colors_dict = yaml.load(colors_file, Loader=SafeLoader)
@@ -92,17 +132,17 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
             logger.info(f"Updated highlight settings from: {colors_file_path}")
 
     def on_created(self, event: FileSystemEvent) -> None:
-        """Handle file creation events by producing transcription tasks."""
-        file_path = event.src_path
-        file_name = os.path.basename(file_path)
+        """Handle file creation events by producing decoding tasks."""
+        file_path = event.src_path  # Full path to the new file
+        file_name = os.path.basename(file_path)  # Name of the new file
 
         if file_name == COLORS_SETTINGS_NAME:
             self._update_colors(file_path)
             return
 
-        # Produce a new transcription task
-        logger.info(f"New file detected: {file_path}")
-        self.transcriber.add_task(file_path)
+        # Produce a new decoding task
+        logger.info(f"New audio file detected: {file_path}")
+        self.queue.put(Transcription(file_path))
 
     def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification events."""
@@ -113,3 +153,7 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         """Handle file close events."""
         if os.path.basename(event.src_path) == COLORS_SETTINGS_NAME:
             self._update_colors(event.src_path)
+
+    def on_deleted(self, event: FileSystemEvent) -> None:
+        """Handle file deletion events."""
+        logger.info(f"File deleted: {event.src_path}")

@@ -8,7 +8,7 @@
             "module": "SignalScribe",
             "justMyCode": false,
             "args": [
-                // "-V",
+                "-V",
                 "--recursive",
                 "~/Development/Audio"
             ],

@@ -8,8 +8,12 @@ from rich.table import Table
 from .utils import logger, console, nested_dict_to_string, resolve_filepath
 from .model import ModelManager
 from .transcriber import Transcriber
-from .watcher import FolderWatcher, FolderWatcherHandler
+from .decoder import Decoder
+from .watcher import FolderWatcher
 from .version import __version__
+from multiprocessing import Queue, Process
+
+# from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn,
 
 
 def _cleanup_old_logs(log_dir: Path, keep_last: int = 10) -> None:
@@ -37,6 +41,7 @@ class SignalScribeApp:
         self.model_manager = None
         self.model = None
         self.transcriber = None
+        self.decoder = None
         self.watcher = None
         self.handler = None
 
@@ -96,25 +101,45 @@ class SignalScribeApp:
             logger.info(f"Using CSV file: {self.csv_filepath}")
             logger.info(f"Using log file: {self.log_filepath}")
 
-            # Initialize transcriber
-            self.transcriber = Transcriber(
-                model=self.model,
-                csv_filepath=self.csv_filepath,
-                silent=self.args.silent,
-            )
+            # Initialize queues for passing data between stages of the transcription pipeline
+            # Use multiprocessing.Queue instead of queue.Queue for inter-process communication
+            self.decoding_queue = Queue()  # From watcher to decoder
+            self.transcribing_queue = Queue()  # From decoder to transcriber
+            self.result_queue = Queue()  # From transcriber to result writer
 
-            # Initialize watcher and handler
+            # Initialize watcher - watches for new files in the folder and adds them to the decoding queue
             self.watcher = FolderWatcher(
+                queue=self.decoding_queue,
                 folder=self.args.folder,
                 formats=self.args.formats,
                 recursive=self.args.recursive,
+                # polling=self.args.polling,
+                # polling_interval=self.args.polling_interval,
             )
 
-            self.handler = FolderWatcherHandler(
-                folder=self.args.folder,
-                formats=self.args.formats,
-                transcriber=self.transcriber,
+            # Initialize decoder - decodes audio files and adds them to the transcribing queue
+            self.decoder = Decoder(
+                decoding_queue=self.decoding_queue,
+                transcribing_queue=self.transcribing_queue,
+                silent=self.args.silent,
             )
+
+            # Create transcriber process
+            self.transcriber_process = Process(
+                target=self._start_transcriber,
+                args=(
+                    self.args.model,
+                    self.model_manager.model_dir,
+                    self.args.threads,
+                    self.transcribing_queue,
+                    self.result_queue,
+                    self.csv_filepath,
+                    self.args.silent,
+                ),
+                daemon=True,
+            )
+            self.transcriber_process.start()
+            logger.info("Transcriber process started")
 
             self.print_parameters()
             return True
@@ -160,7 +185,6 @@ class SignalScribeApp:
         grid.add_row("CPU Threads", f"{self.args.threads}")
         grid.add_row("CSV File", str(self.csv_filepath))
         grid.add_row("Log File", str(self.log_filepath))
-        # table.add_row("R", "")
 
         console.print(grid)
         console.print("")
@@ -169,7 +193,8 @@ class SignalScribeApp:
         """Run the application."""
         try:
             # Start the watcher
-            self.watcher.run(self.handler)
+            with console.status("Watching folder...", spinner="dots") as status:
+                self.watcher.run()
             return 0
 
         except KeyboardInterrupt:
@@ -182,10 +207,58 @@ class SignalScribeApp:
             self.shutdown()
             return 1
 
+    def _start_transcriber(
+        self, 
+        model_name, 
+        models_dir, 
+        n_threads,
+        transcribing_queue, 
+        result_queue, 
+        csv_filepath, 
+        silent
+    ):
+        """Initialize and run the transcriber in a separate process."""
+        try:
+            # Load model in this process
+            model = Model(
+                model=model_name,
+                models_dir=models_dir,
+                n_threads=n_threads,
+                print_progress=False,
+                print_timestamps=False,
+            )
+            logger.info(f"Loaded {model_name} model in transcriber process")
+            
+            # Initialize transcriber
+            transcriber = Transcriber(
+                transcribing_queue=transcribing_queue,
+                result_queue=result_queue,
+                model=model,
+                csv_filepath=csv_filepath,
+                silent=silent,
+                print_progress=False,
+            )
+            
+            # This process will stay alive as long as the transcriber thread is running
+            # We just need to wait until it's done
+            transcriber.transcriber_thread.join()
+            
+        except Exception as e:
+            logger.error(f"Error in transcriber process: {e}")
+
     def shutdown(self) -> None:
-        """Shutdown all components gracefully."""
-        if self.transcriber:
-            self.transcriber.shutdown()
+        """Gracefully shutdown all components."""
+        logger.info("Shutting down application...")
+        
+        # Terminate transcriber process
+        if hasattr(self, 'transcriber_process') and self.transcriber_process.is_alive():
+            self.transcriber_process.terminate()
+            logger.info("Terminated transcriber process")
+        
+        if self.decoder:
+            self.decoder.shutdown()
+            
+        logger.info("Application shutdown complete")
 
     def _load_model(
         self,
