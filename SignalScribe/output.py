@@ -19,7 +19,7 @@ class Output:
     def __init__(
         self,
         output_queue: TrackedQueue,
-        csv_filepath: str,
+        csv_file_path: str,
         shared_colors: dict = None,
         shared_colors_lock=None,
     ):
@@ -33,7 +33,7 @@ class Output:
             daemon=True,
             args=(
                 output_queue,
-                csv_filepath,
+                csv_file_path,
                 self.stop_event,
                 self.shared_colors,
                 self.shared_colors_lock,
@@ -45,7 +45,7 @@ class Output:
     def _output_loop(
         self,
         output_queue: TrackedQueue,
-        csv_filepath: str,
+        csv_file_path: str,
         stop_event: Event,
         shared_colors: dict,
         shared_colors_lock,
@@ -54,7 +54,8 @@ class Output:
 
         while not stop_event.is_set():
             try:
-                logger.debug(f"Output thread waiting for transcription")
+                # For debug only (should be removed really):
+                # logger.debug(f"Output thread waiting for transcription")
                 transcription = output_queue.get(timeout=1)
 
                 text = transcription.text
@@ -66,10 +67,10 @@ class Output:
                 )
 
                 # Ensure CSV file exists
-                csv_filepath = os.path.abspath(csv_filepath)
-                if not os.path.exists(csv_filepath):
+                csv_file_path = os.path.abspath(csv_file_path)
+                if not os.path.exists(csv_file_path):
                     with open(
-                        csv_filepath, "w", newline="", encoding="utf-8"
+                        csv_file_path, "w", newline="", encoding="utf-8"
                     ) as csv_file:
                         writer = csv.writer(csv_file)
                         writer.writerow(
@@ -77,7 +78,7 @@ class Output:
                         )
 
                 # Save to CSV
-                with open(csv_filepath, "a", newline="", encoding="utf-8") as csv_file:
+                with open(csv_file_path, "a", newline="", encoding="utf-8") as csv_file:
                     writer = csv.writer(csv_file)
                     writer.writerow(
                         [

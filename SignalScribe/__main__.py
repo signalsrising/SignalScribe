@@ -52,6 +52,8 @@ def main():
         logger.debug(f"Application setup complete")
     except Exception as e:
         print(f"Error setting up application: {str(e)}")
+        # import traceback
+        # print(traceback.format_exc())
         return 1
 
     # Run the application

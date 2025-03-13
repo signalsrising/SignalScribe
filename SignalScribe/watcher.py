@@ -83,6 +83,7 @@ class FolderWatcher:
         except KeyboardInterrupt:
             logger.info("Stopping folder watcher...")
             self.observer.stop()
+            raise KeyboardInterrupt
 
         self.observer.join()
 

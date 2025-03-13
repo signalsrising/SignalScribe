@@ -29,8 +29,8 @@ class SignalScribeApp:
     """Main application class that manages all pretty much everything apart from setting up logging."""
 
     @property
-    def csv_filepath(self) -> Path:
-        return self._csv_filepath
+    def csv_file_path(self) -> Path:
+        return self._csv_file_path
 
     @property
     def log_file_path(self) -> Path:
@@ -54,7 +54,7 @@ class SignalScribeApp:
 
         # Threads:
         self.model_manager = None  # Checks for models and downloads them if needed
-        self.watcher = None  # FWatches for new files
+        self.watcher = None  # Watches for new files
         self.decoder = None  # Reads audio files and adds to the transcribing queue
         self.transcriber = None  # Transcriber, transcribes audio files and adds them to the completed queue
         self.output = None  # Output, saves transcriptions to CSV and outputs to console
@@ -73,17 +73,14 @@ class SignalScribeApp:
         self._print_banner()
 
         self._set_up_recording_folder()
+        self._set_up_csv_file()
 
         # Initialize model management - checks for required models and downloads them if needed
         model_dir = self.args.model_dir if hasattr(self.args, "model_dir") else None
         self.model_manager = ModelManager(model_dir, self.args.list_models)
 
-        # Resolve file paths
-        self._csv_filepath = self._resolve_csv_filepath()
-        self._log_file_path = self._resolve_log_filepath()
-
         # Log the resolved paths
-        logger.info(f"Using CSV file: {self._csv_filepath}")
+        logger.info(f"Using CSV file: {self._csv_file_path}")
         logger.info(f"Using log file: {self._log_file_path}")
 
         # Pipeline is:
@@ -132,7 +129,7 @@ class SignalScribeApp:
         # Initialize output - saves transcriptions to CSV and outputs to console
         self.output = Output(
             output_queue=self.output_queue,
-            csv_filepath=self.csv_filepath,
+            csv_file_path=self._csv_file_path,
             shared_colors=self.shared_colors,
             shared_colors_lock=self.shared_colors_lock,
         )
@@ -162,54 +159,86 @@ class SignalScribeApp:
                     f"Monitoring SDRTrunk recording directory: {self.args.folder}"
                 )
                 self.monitoring_sdrtrunk = True
+                return
             else:
-                logger.error("Could not determine SDRTrunk recording directory")
                 console.print(
                     "[red]Error:[/red] No folder specified and could not find SDRTrunk recording directory."
                 )
                 console.print("Please either:")
-                console.print("  1. Specify a folder with --folder")
-                console.print(
-                    "  2. Ensure SDRTrunk is installed and properly configured"
+                console.print("1. Specify a folder with --folder")
+                console.print("2. Ensure SDRTrunk is installed and configured")
+                console.print("   (SDRTrunk does not need to be running)")
+                
+                # This is fatal error by now so let's raise an exception and let the parent caller handle die gracefully...
+                raise FileNotFoundError(
+                    "No folder specified and could not find SDRTrunk recording directory."
                 )
-                console.print("     (SDRTrunk does not need to be running)")
-                return False
 
         else:
             # Check that the folder exists, and if not, prompt the user to create it
             self.folder_path = Path(self.args.folder).expanduser().resolve()
 
             if not self.folder_path.exists():
-                console.print(
-                    f"[red]Error:[/red] The folder to observe does not exist: {self.folder_path}"
-                )
                 if Confirm.ask(
-                    f"Would you like to create it?",
-                    default=False,
+                    f"[red]The folder you requested to observe does not exist[/red]\n Would you like to create it?",
+                    default=True,
                 ):
-                    try:
-                        self.folder_path.mkdir(parents=True, exist_ok=True)
-                    except Exception as e:
-                        console.print(
-                            f"[red]Error:[/red] Failed to create folder: {self.folder_path}"
-                        )
-                        return False
+                    logger.debug(f"Creating folder: {self.folder_path}")
+
+                    # Don't catch any exceptions here, let the caller deal with it
+                    self.folder_path.mkdir(parents=True, exist_ok=True)
+                    return
+
                 else:
-                    return False
+                    raise FileNotFoundError(
+                        f"The specified folder does not exist: {self.folder_path}"
+                    )
 
             # Check that the folder is a directory, and if not (i.e. a file), prompt the user to use its parent directory
             if not self.folder_path.is_dir():
-                console.print(
-                    f"[red]Error:[/red] The specified path is not a directory: {self.folder_path}"
-                )
                 parent_dir = self.folder_path.parent
                 if Confirm.ask(
-                    f"Would you like to use its parent directory instead? {parent_dir}",
+                    f"[red]The given path is not a directory[/red]\n Would you like to use its parent directory instead? {parent_dir}",
                     default=False,
                 ):
                     self.folder_path = parent_dir
                 else:
-                    return False
+                    raise FileExistsError(
+                        f"The specified path is is a file, not a directory: {self.folder_path}"
+                    )
+                
+    def _set_up_csv_file(self):
+        """
+        Set up the CSV file:
+        1. If CSV file is not specified, use self.args.folder/signalscribe.csv.
+        2. If CSV file is specified, check its parent directory exists. If not, prompt the user to create it.
+        """
+        logger.debug("Setting up CSV file")
+        
+        if not hasattr(self.args, "csv_file") or not self.args.csv_file:
+            # Use default CSV file in the recording folder
+            self._csv_file_path = self.folder_path / "signalscribe.csv"
+            logger.debug(f"Using default CSV file path: {self._csv_file_path}")
+        else:
+            # Use the specified CSV file
+            self._csv_file_path = Path(self.args.csv_file).expanduser().resolve()
+            logger.debug(f"Using specified CSV file path: {self._csv_file_path}")
+            
+            # Check if the parent directory exists
+            parent_dir = self._csv_file_path.parent
+            if not parent_dir.exists():
+                if Confirm.ask(
+                    f"[red]The directory for the CSV file does not exist[/red]\n Would you like to create it?",
+                    default=True,
+                ):
+                    logger.debug(f"Creating directory for CSV file: {parent_dir}")
+                    
+                    # Don't catch any exceptions here, let the caller deal with it
+                    parent_dir.mkdir(parents=True, exist_ok=True)
+                else:
+                    raise FileNotFoundError(
+                        f"The directory for the requested CSV file location does not exist: {parent_dir}"
+                    )
 
     def _build_status_display(self):
         """Create a rich progress display for queue status."""
@@ -332,12 +361,12 @@ class SignalScribeApp:
         grid.add_row("CPU Threads", f"{self.args.threads}", "Set with --threads or -t")
         grid.add_row(
             "CSV File",
-            str(self.csv_filepath),
+            str(self._csv_file_path),
             "Set with --csv-path, remove with --no-csv",
         )
         grid.add_row(
             "Log File",
-            str(self.log_filepath),
+            str(self._log_file_path),
             "Set with --log-dir-path, remove with --no-logs",
         )
 

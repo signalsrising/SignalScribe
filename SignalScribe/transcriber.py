@@ -3,11 +3,10 @@ from pywhispercpp.model import Model
 from queue import Empty
 import logging
 import time
-
+from pathlib import Path
 from .transcription import Transcription
 from .defaults import DEFAULT_MODEL
 from .logging import logger
-
 """
 Whisper seems to lock the GIL while transcribing so even if its
 not in the main python thread it blocks the main thread and prevents
@@ -21,7 +20,7 @@ which is implemented here.
 # maybe can be inside the class but idk. works for now
 def transcriber_worker(
     model_name: str,
-    model_dir: str,
+    bin_file_path: Path,
     n_threads: int,
     task_queue: Queue,
     output_queue: Queue,
@@ -34,14 +33,23 @@ def transcriber_worker(
     logger = logging.getLogger("transcriber_process")
 
     logger.info(f"Loading {model_name} model in worker process")
+
+    # Last ditch check to make sure the model exists otherwise pywhispercpp will try to download it
+    # which we really dont want to happen (we should handle this ourselves)
+    if not bin_file_path.exists():
+        raise FileNotFoundError(
+            f"Model file for {model_name} does not exist at location: {bin_file_path}"
+        )
+
     # Load the model actually in this process
     model = Model(
         model=model_name,
-        models_dir=model_dir,
+        models_dir=None,
         n_threads=n_threads,
         print_progress=False,
         print_timestamps=False,
         redirect_whispercpp_logs_to=None,
+        suppress_non_speech_tokens=True,
     )
     logger.info(f"Loaded {model_name} model in worker process")
 

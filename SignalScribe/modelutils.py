@@ -17,12 +17,9 @@ import hashlib
 from .logging import logger, console
 import platform
 
-
 """
 Contains all static functions for ModelManager to download and read model info files.
 """
-
-
 def get_file_details(filename: str) -> Optional[Tuple[str, str]]:
     """
     Fetches the SHA256 hash for a file directly from Hugging Face,
@@ -89,12 +86,18 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
         A dictionary of model information with both standard and CoreML variants:
         {
             "model_name": {
-                "bin": "URL to the standard .bin model file",
-                "bin_size": "Size of the bin file",
-                "bin_sha256": "SHA256 hash of the bin file",
-                "coreml": "URL to the CoreML encoder.mlmodelc.zip file",
-                "coreml_size": "Size of the coreml file",
-                "coreml_sha256": "SHA256 hash of the coreml file"
+                "bin": {
+                    "url": "URL to the standard .bin model file",
+                    "size": "Size of the bin file",
+                    "sha256": "SHA256 hash of the bin file",
+                    "downloaded": "True if the bin file has been downloaded, False otherwise"
+                },
+                "coreml": {
+                    "url": "URL to the CoreML encoder.mlmodelc.zip file",
+                    "size": "Size of the coreml file",
+                    "sha256": "SHA256 hash of the coreml file",
+                    "downloaded": "True if the coreml file has been downloaded, False otherwise"
+                }
             },
             ...
         }
@@ -107,16 +110,19 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
     base_download_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
 
     # Fetch the repository page
+    logger.debug(f"Fetching repository page from {repo_url}")
     response = requests.get(repo_url)
     response.raise_for_status()
 
     # Parse the HTML content
+    logger.debug(f"Parsing HTML content")
     soup = BeautifulSoup(response.text, "html.parser")
 
     # Initialize results dictionary
     coreml_models = {}
 
     # Extract all file links
+    logger.debug(f"Extracting all file links")
     file_links = []
     for a_tag in soup.find_all("a", href=True):
         href = a_tag.get("href", "")
@@ -125,6 +131,8 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
             filename = href.split("/")[-1]
             file_links.append(filename)
 
+    logger.debug(f"Found {len(file_links)} file links")
+    
     # Filter for only CoreML (compatible) models
     # N.b.: Users could technically user any model they want, but
     #       we're artifically limiting all users to only CoreML compatible
@@ -169,7 +177,9 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
 
                 bin_downloaded = bin_filepath.exists()
 
+                coreml_models[display_name] = {}
                 coreml_models[display_name]["bin"] = {
+                    "filename": bin_model_file,
                     "url": bin_url,
                     "size": None,
                     "sha256": None,
@@ -179,27 +189,27 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
                 # Get bin file info
                 bin_size, bin_hash = get_file_details(bin_model_file)
                 if bin_size and bin_hash:
-                    coreml_models[display_name]["bin_size"] = bin_size
-                    coreml_models[display_name]["bin_sha256"] = bin_hash
+                    coreml_models[display_name]["bin"]["size"] = bin_size
+                    coreml_models[display_name]["bin"]["sha256"] = bin_hash
 
                 if platform.system() == "Darwin":
                     # Get CoreML file info
-                    coreml_size, coreml_hash = get_file_details(coreml_model_file)
-                    if coreml_size and coreml_hash:
-                        coreml_models[display_name]["coreml_size"] = coreml_size
-                        coreml_models[display_name]["coreml_sha256"] = coreml_hash
-
                     coreml_filepath = model_dir / coreml_model_file
                     coreml_downloaded = coreml_filepath.exists()
 
                     coreml_models[display_name]["coreml"] = {
                         "url": coreml_url,
-                        "filepath": coreml_filepath,
+                        "filename": coreml_model_file.replace(".zip", ""),
                         "size": None,
                         "sha256": None,
                         "downloaded": coreml_downloaded,
                     }
+                    coreml_size, coreml_hash = get_file_details(coreml_model_file)
+                    if coreml_size and coreml_hash:
+                        coreml_models[display_name]["coreml"]["size"] = coreml_size
+                        coreml_models[display_name]["coreml"]["sha256"] = coreml_hash
 
+    
     return coreml_models
 
 
@@ -301,6 +311,9 @@ def write_model_info_file(file_path: Path, model_info: Dict) -> bool:
         with open(file_path, "w") as f:
             json.dump(model_info, f, indent=4)
         return True
+    except KeyboardInterrupt:
+        logger.info("User interrupted model info file write")
+        raise KeyboardInterrupt
     except Exception as e:
         raise Exception(f"Failed to write model info file {file_path}: {e}")
 
@@ -320,12 +333,17 @@ def validate_model_info(model_info: Dict) -> bool:
         if platform.system() == "Darwin" and "coreml" not in model_data:
             return False
         # check that each model_data entry has all of the following:
-        # url, size, sha256, and downloaded bool:
+        # url, size, sha256, and downldoaed bool:
         for key in required_keys:
             if key not in model_data:
                 return False
     return True
 
+def validate_file_hash(file_path: Path, expected_hash: str) -> bool:
+    """Validate the hash of a file."""
+    logger.debug(f"Validating hash for {file_path}")
+    calculated_hash = calculate_hash(file_path)
+    return calculated_hash == expected_hash
 
 def calculate_hash(file_path: Path) -> str:
     """Calculate the SHA-256 hash of a file."""
@@ -340,7 +358,7 @@ def calculate_hash(file_path: Path) -> str:
     return sha256_hash.hexdigest()
 
 
-def extract_coreml_model(zip_path: Path) -> bool:
+def extract_coreml_model(zip_path: Path):
     """Extract CoreML model from zip file."""
 
     folder = zip_path.parent
@@ -351,6 +369,8 @@ def extract_coreml_model(zip_path: Path) -> bool:
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(folder)
         return True
+    except KeyboardInterrupt:
+        logger.info("User interrupted CoreML model extraction")
+        raise KeyboardInterrupt
     except Exception as e:
-        logger.error(f"Failed to extract CoreML model: {e}")
-        return False
+        raise Exception(f"Failed to extract CoreML model: {e}")

@@ -36,7 +36,9 @@ class Decoder:
         """Decode audio files from the queue until stopped."""
         while not stop_event.is_set():
             try:
-                logger.debug(f"Decoder thread waiting for task")
+                # For debug only (should be removed really):
+                # logger.debug(f"Decoder thread waiting for task")
+
                 # Use shorter timeout to check stop_event more frequently
                 transcription = decoding_queue.get(timeout=0.5)
 
