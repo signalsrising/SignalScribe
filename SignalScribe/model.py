@@ -10,12 +10,13 @@ from .modelutils import (
     # Static functions to reduce clutter in this file
     fetch_available_models,
     read_model_info_file,
-    write_model_info_file, 
+    write_model_info_file,
     validate_model_info,
     validate_file_hash,
     download_file,
     extract_coreml_model,
 )
+from .colors import AppColors
 
 MODEL_INFO_FILENAME = "models.json"
 DEFAULT_MODEL_DIR = Path.home() / ".signalscribe" / "models"
@@ -45,6 +46,8 @@ class ModelManager:
 
         self._model_dir = Path(self._model_dir)
 
+        self._selected_model = None
+
         # 1. Check to see if model directory *and* model info file exist
         if not self._model_dir.exists():
             logger.info(f"Model directory does not exist, creating it")
@@ -63,30 +66,35 @@ class ModelManager:
             logger.info(f"Model info file does not exist")
         except json.JSONDecodeError:
             logger.info(f"Model info file is not valid JSON")
-            model_info_file.unlink() # delete the file as it's junk
+            model_info_file.unlink()  # delete the file as it's junk
         except KeyboardInterrupt:
             logger.info("User interrupted model info file read")
             raise KeyboardInterrupt
         except Exception as e:
-            raise Exception(f"Failed to read model info file, "
-                            f"this is indicative of the file being in use by another process. "
-                            f"Please close any other instances of SignalScribe and try again.")
+            raise Exception(
+                f"Failed to read model info file, "
+                f"this is indicative of the file being in use by another process. "
+                f"Please close any other instances of SignalScribe and try again."
+            )
 
         model_info_file_updated = False
-        
+
         # 3. Validate the model info file
         model_info_file_is_valid = validate_model_info(self._model_info)
         if model_info_file_is_valid:
             logger.info(f"Valid model info file found at {model_info_file}")
         else:
-            logger.debug(f"Deleting invalid model info file: {model_info_file} (if it exists)")
-            model_info_file.unlink(missing_ok=True) # delete the file as it's junk
-
+            logger.debug(
+                f"Deleting invalid model info file: {model_info_file} (if it exists)"
+            )
+            model_info_file.unlink(missing_ok=True)  # delete the file as it's junk
 
         # 4. If user has requested to reload the model list from internet,
         #    fetch the available models from huggingface:
         if user_requested_model_list:
-            logger.debug("User requested model list regardless of whether it exists or not, attempting to fetch it from the internet")
+            logger.debug(
+                "User requested model list regardless of whether it exists or not, attempting to fetch it from the internet"
+            )
             try:
                 self._model_info = fetch_available_models(self._model_dir)
                 model_info_file_updated = True
@@ -95,9 +103,10 @@ class ModelManager:
                 raise KeyboardInterrupt
             except Exception as e:
                 import traceback
+
                 traceback.print_exc()
                 # If we fail to fetch the available models try to use read local model info file:
-                
+
                 if model_info_file_is_valid:
                     console.print(
                         f"Failed to fetch available models from the internet, using local model info file: {model_info_file}"
@@ -111,7 +120,9 @@ class ModelManager:
         #    attempt to fetch the available models from huggingface:
 
         elif not model_info_file_is_valid:
-            logger.debug("Model info file is invalid, attempting to fetch it from the internet")
+            logger.debug(
+                "Model info file is invalid, attempting to fetch it from the internet"
+            )
             try:
                 self._model_info = fetch_available_models(self._model_dir)
                 model_info_file_updated = True
@@ -152,15 +163,22 @@ class ModelManager:
         # If we get this far then we have a valid model info file and are ready
         # to load a model
 
+    def model_list(self) -> List[str]:
+        return list(self._model_info.keys())
+
     # Not a static method as we need to access the model_info dict
     def _model_is_downloaded(self, model_name: str) -> bool:
-        bin_file_path = self._model_dir / self._model_info[model_name]["bin"]["filename"]
+        bin_file_path = (
+            self._model_dir / self._model_info[model_name]["bin"]["filename"]
+        )
         bin_downloaded = bin_file_path.exists()
         self._model_info[model_name]["bin"]["downloaded"] = bin_downloaded
-        
+
         if bin_downloaded:
             size_on_disk = os.path.getsize(bin_file_path)
-            console.print(f"Bin expected size: {self._model_info[model_name]['bin']['size']}")
+            console.print(
+                f"Bin expected size: {self._model_info[model_name]['bin']['size']}"
+            )
             console.print(f"Bin size on disk: {size_on_disk}")
 
         if platform.system() == "Darwin":
@@ -172,14 +190,18 @@ class ModelManager:
 
             if coreml_downloaded:
                 size_on_disk = os.path.getsize(coreml_file_path)
-                console.print(f"CoreML expected size: {self._model_info[model_name]['coreml']['size']}")
+                console.print(
+                    f"CoreML expected size: {self._model_info[model_name]['coreml']['size']}"
+                )
                 console.print(f"CoreML size on disk: {size_on_disk}")
 
             return bin_downloaded and coreml_downloaded
 
         return bin_downloaded
-    
-    def prompt_validate_file(self, model_name: str, expected_hash: str, file_path: Path) -> bool:
+
+    def prompt_validate_file(
+        self, model_name: str, expected_hash: str, file_path: Path
+    ) -> bool:
         console.status(f"Validating integrity")
         if not validate_file_hash(file_path, expected_hash):
             logger.warning(f"Hash validation failed for {model_name} model file.")
@@ -188,26 +210,31 @@ class ModelManager:
             if Confirm.ask(
                 f"[bold red]The downloaded model file for {model_name} appears to be corrupted.[/] "
                 f"Would you like to delete it and download again?",
-                default=True
+                default=True,
             ):
                 try:
-                    file_path.unlink()
-                    raise Exception(f"Model file for {model_name} has been deleted. Please restart SignalScribe to download the model again.")
+                    file_path.unlink(missing_ok=True)
+                    raise Exception(
+                        f"Model file for {model_name} has been deleted. Please restart SignalScribe to download the model again."
+                    )
                 except Exception as e:
-                    logger.fatal(f"Couldn't delete the model file for {model_name}. Please delete it manually.")
+                    logger.fatal(
+                        f"Couldn't delete the model file for {model_name}. Please delete it manually."
+                    )
                     logger.fatal(f"Full file path to delete: {file_path}")
                     raise e
             else:
-                logger.warning(f"Keeping the corrupted file. Model may not work correctly.")
+                logger.warning(
+                    f"Keeping the corrupted file. Model may not work correctly."
+                )
 
     @property
     def selected_model(self) -> str:
         return self._selected_model
 
     @selected_model.setter
-    def set_selected_model(self, model_name: str):
+    def selected_model(self, model_name: str):
         if model_name not in self._model_info.keys():
-            logger.error(f"Model {model_name} not found")
             raise ValueError(f"Model {model_name} not found")
 
         self._selected_model = model_name
@@ -222,46 +249,58 @@ class ModelManager:
         """Ensure all required model files exist and are valid."""
         logger.info(f"Ensuring {model_name} model files exist")
 
+        model_info = self._model_info[model_name]  # for brevity
         missing_files = []
         total_bytes_needed = 0
 
-        if not self._model_info[model_name]["bin"]["downloaded"]:
+        logger.debug(f"Checking if {model_name} bin file exists")
+        bin_file_path = self._model_dir / model_info["bin"]["filename"]
+        model_info["bin"]["downloaded"] = bin_file_path.exists()
+
+        if not bin_file_path.exists():
             missing_files.append("bin")
-            total_bytes_needed += self._model_info[model_name]["bin"]["size"]
+            total_bytes_needed += model_info["bin"]["size"]
 
         if platform.system() == "Darwin":
-            if not self._model_info[model_name]["coreml"]["downloaded"]:
+            logger.debug(f"Checking if {model_name} coreml file exists")
+            coreml_file_path = self._model_dir / model_info["coreml"]["filename"]
+            model_info["coreml"]["downloaded"] = coreml_file_path.exists()
+
+            if not coreml_file_path.exists():
                 missing_files.append("coreml")
-                total_bytes_needed += self._model_info[model_name]["coreml"]["size"]
+                total_bytes_needed += model_info["coreml"]["size"]
 
         if not missing_files:
-            logger.info(f"{model_name} model files exist, don't need to download anything")
+            logger.info(
+                f"Model file(s) for '{model_name}' exist, don't need to download anything"
+            )
+            logger.debug(f"bin model file: {bin_file_path}")
+            if platform.system() == "Darwin":
+                logger.debug(f"coreml model file: {coreml_file_path}")
             return
-        
+
         logger.info(f"Downloading missing model files for {model_name}")
 
-
-        console.print(
-            f"Couldn't find {len(missing_files)} required model file(s) in [green]{self._model_dir}[/green]:"
-        )
+        console.print(f"Need to download {len(missing_files)} required model file(s):")
 
         for file_type in missing_files:
             console.print(
-                f"  • {self._model_info[model_name][file_type]['filename']}: {format_size(self._model_info[model_name][file_type]['size'])}"
+                f"  • {model_info[file_type]['filename']}: {format_size(model_info[file_type]['size'])}"
             )
         console.print(f"Total download size: {format_size(total_bytes_needed)}")
 
         if not Confirm.ask(
-            f"Would you like to download the missing model files to {self._model_dir}?\n(This can be changed with the --model-dir flag)",
+            f"[bold]Would you like to download the missing model files?[/bold]\n"
+            f"[dim]Will be downloaded to {self._model_dir}, change with --model-dir[/dim]\n",
             default=True,
         ):
             raise FileNotFoundError(f"Model files for {model_name} not downloaded")
 
         # Download missing files
-        for file_type in missing_files: 
+        for file_type in missing_files:
             file_info = self._model_info[model_name][file_type]
 
-            file_path = self._model_dir / file_info["filename"]
+            file_path = self._model_dir / Path(file_info["url"]).name
 
             # Download the file (will throw an exception if it fails - let the caller handle it)
             download_file(file_info["url"], file_path)
@@ -272,24 +311,6 @@ class ModelManager:
         # Extract CoreML model if needed
         if "coreml" in missing_files:
             extract_coreml_model(file_path)
-
-
-# # Model information
-# MODEL_INFO = {
-#     "large-v3-turbo": {
-#         "base_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main",
-#         "files": {
-#             "ggml": {
-#                 "filename": "ggml-large-v3-turbo.bin",
-#                 "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-#             },
-#             "coreml": {
-#                 "filename": "ggml-large-v3-turbo-encoder.mlmodelc.zip",
-#                 "sha256": "84bedfe895bd7b5de6e8e89a0803dfc5addf8c0c5bc4c937451716bf7cf7988a",
-#             },
-#         },
-#     }
-# }
 
 
 # def get_model_files(self) -> List[Path]:

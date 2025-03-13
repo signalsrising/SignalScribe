@@ -8,6 +8,7 @@ import re
 from .trackedqueue import TrackedQueue
 from .utils import insert_string
 from .logging import logger, console
+from .colors import ConsoleColors
 
 
 class Output:
@@ -90,8 +91,7 @@ class Output:
                     )
 
                 # Print the results:
-                console.print(f"{added_timestamp}", end=" | ")
-                console.print(f"[blue]{filename}", style=f"link {filepath}")
+                console.print(f"{added_timestamp} | {filename}", style="dim")
 
                 if not text:
                     console.print(
@@ -120,7 +120,7 @@ class Output:
             except Exception as e:
                 logger.error(f"Error in output thread: {e}")
 
-    def shutdown(self) -> None:
+    def stop(self) -> None:
         logger.info("Shutting down output thread...")
         self.stop_event.set()
 

@@ -3,13 +3,6 @@
 import enum
 
 
-class AppColors(enum.Enum):
-    # File paths
-    FILE_PATH = "GREEN"
-    FILE_NAME = "YELLOW"
-    FILE_SIZE = "CYAN"
-
-
 class ConsoleColors(enum.Enum):
     BLACK = "black"
     RED = "red"
@@ -27,3 +20,10 @@ class ConsoleColors(enum.Enum):
     BRIGHT_MAGENTA = "bright_magenta"
     BRIGHT_CYAN = "bright_cyan"
     BRIGHT_WHITE = "bright_white"
+
+
+class AppColors(enum.Enum):
+    # File paths
+    FILE_PATH = ConsoleColors.BRIGHT_CYAN.value
+    FILE_NAME = ConsoleColors.YELLOW.value
+    FILE_SIZE = ConsoleColors.CYAN.value

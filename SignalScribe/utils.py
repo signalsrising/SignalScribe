@@ -1,24 +1,80 @@
 """Utility functions and constants for SignalScribe."""
 
 import argparse
+from argparse import Namespace
 import platform
-import socket
-import re
-import uuid
-import json
 import psutil
-import logging
+import traceback
+import os
+
+from .logging import console
+
 from .defaults import (
     LOG_DIR_PATH,
-    DEFAULT_MODEL,
     FILETYPES,
-    DEFAULT_NUM_THREADS,
     MODEL_DIR_PATH,
+    DEFAULT_MODEL,
 )
 
-from SignalScribe import __version__
+from SignalScribe.version import __version__
 
-def parse_args(args=None):
+
+class UserException(Exception):
+    """Exception caused by user action that should gracefully exit the application."""
+
+    pass
+
+
+def check_ffmpeg():
+    try:
+        import subprocess
+
+        # Run ffmpeg -version to check if it's available
+        result = subprocess.run(
+            ["ffmpeg", "-version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            console.print(
+                "[bold red]Error: ffmpeg is not installed or not in the PATH.[/bold red]"
+            )
+            console.print(
+                "[yellow]Please install ffmpeg before running SignalScribe.[/yellow]"
+            )
+            console.print(
+                "[dim]Visit https://ffmpeg.org/download.html for installation instructions.[/dim]"
+            )
+            sys.exit(1)
+
+    except FileNotFoundError:
+        console.print(
+            "[bold red]Error: ffmpeg is not installed or not in the PATH.[/bold red]"
+        )
+        console.print(
+            "[yellow]Please install ffmpeg before running SignalScribe.[/yellow]"
+        )
+        console.print(
+            "[dim]Visit https://ffmpeg.org/download.html for installation instructions.[/dim]"
+        )
+        sys.exit(1)
+
+
+def compact_traceback(exc_type, exc_value, exc_traceback):
+    """Format traceback in a compact way, showing only filename, line number and code."""
+    tb_lines = []
+    for frame in traceback.extract_tb(exc_traceback, limit=-3):
+        filename = os.path.basename(frame.filename)
+        tb_lines.append(f"[{filename}:{frame.lineno}] {frame.line}")
+
+    error_msg = f"[{exc_type.__name__}] {exc_value}"
+    return "\n".join(tb_lines + [error_msg])
+
+
+def parse_args(args=None) -> Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description=f"SignalScribe {__version__} - Automatic Audio Transcription"
@@ -41,18 +97,30 @@ def parse_args(args=None):
     )
 
     parser.add_argument(
+        "-r",
+        "--reload-models",
+        action="store_true",
+        default=False,
+        help="Reload list of available models from the internet",
+    )
+
+    parser.add_argument(
         "-c",
         "--csv-path",
         type=str,
-        help="Path to CSV file for storing transcriptions.\nBy default this will be the name of the folder that the audio files are in, with a .csv extension.\nIf no csv filepath is provided, the default name will be used and stored in the same directory as the audio files.",
+        help="""Path to place for storing transcriptions in CSV format.\n
+                Can be a complete path including filename, or directory in which a name will be generated.
+                If no path is provided, the default name will be used and stored in the same directory as the audio files.""",
     )
 
     parser.add_argument(
         "-l",
-        "--log-dir",
+        "--log-path",
         type=str,
         default=str(LOG_DIR_PATH),
-        help=f"Path to directory to store logging output.\nIf no log directory is provided, logs will be stored in {LOG_DIR_PATH}",
+        help=f"""Path to place to store logging output.\n
+                 Can be a complete path including filename, or directory in which a name will be generated.
+                 If no log path is provided, logs will be stored in {LOG_DIR_PATH}""",
     )
 
     parser.add_argument(
@@ -77,7 +145,7 @@ def parse_args(args=None):
         "-m",
         "--model",
         type=str,
-        default=DEFAULT_MODEL,
+        default=None,
         help=f"Whisper model to use. Default: {DEFAULT_MODEL}. Use --list-models to see all available models.",
     )
 
@@ -111,13 +179,6 @@ def parse_args(args=None):
     )
 
     parser.add_argument(
-        "--max-threads",
-        type=int,
-        default=DEFAULT_NUM_THREADS,  # Maximum number of logical CPU cores
-        help="Maximum number of threads to use",
-    )
-
-    parser.add_argument(
         "-V",
         "--verbose",
         action="store_true",
@@ -140,18 +201,6 @@ def parse_args(args=None):
         help="Disable console output",
     )
 
-    # parser.add_argument(
-    #     "--log-level",
-    #     type=str,
-    #     default=DEFAULT_LOG_LEVEL,
-    #     choices=log_levels.keys(),
-    #     help=f"Log level to output to log file and/or console (if --log-path or --verbose are specified) Default: {DEFAULT_LOG_LEVEL}",
-    # )
-
-    # parser.add_argument(
-    #     "--realtime", action="store_true", help="Enable realtime transcription"
-    # )
-
     return parser.parse_args(args)
 
 
@@ -170,7 +219,7 @@ def nested_dict_to_string(
 
 
 def insert_string(string: str, insert: str, position: int) -> str:
-    """Insert a string into another string at a specific position."""
+    """Insert a string into another string at a specific position. (used for colour highlighting)"""
     return string[:position] + insert + string[position:]
 
 
@@ -183,13 +232,16 @@ def format_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f} TiB"
 
 
-def get_system_info() -> dict:
-    info={}
-    info['platform-version'] = platform.version()
-    info['architecture'] = platform.machine()
-    info['processor'] = platform.processor()
-    info['ram'] = format_size(round(psutil.virtual_memory().total))
-    info['ram_available'] = format_size(round(psutil.virtual_memory().available))
-    info['cpu_count'] = psutil.cpu_count()
-    
-    return info
+def get_system_info() -> list[str]:
+    os_string = platform.version()
+    cpu_string = (
+        f"{psutil.cpu_count()} cores, {platform.processor()} ({platform.machine()})"
+    )
+    ram_total = format_size(round(psutil.virtual_memory().total))
+    ram_available = format_size(round(psutil.virtual_memory().available))
+
+    os_line = f"OS:  {os_string}"
+    cpu_line = f"CPU: {cpu_string}"
+    ram_line = f"RAM: {ram_available} available of {ram_total} total"
+
+    return [os_line, cpu_line, ram_line]

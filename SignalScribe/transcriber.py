@@ -3,13 +3,14 @@ from pywhispercpp.model import Model
 from queue import Empty
 import logging
 import time
+from enum import Enum
 from pathlib import Path
 
 from .logging import logger, console
 from .transcription import Transcription
-from .defaults import DEFAULT_MODEL
 from .trackedqueue import TrackedQueue
 from logging.handlers import QueueHandler, QueueListener
+
 """
 Whisper seems to lock the GIL while transcribing so even if its
 not in the main python thread it blocks the main thread and prevents
@@ -25,42 +26,95 @@ to the console.
 
 mp_logger = None
 
-# Am defining the worker function outside of any class to avoid a pickling issues
+
+class TranscriberStatus(Enum):
+    """Status of the transcriber process."""
+
+    INITIALISED = "Initialised"
+    LOADING = "Loading"
+    RUNNING = "Running"
+    SHUTDOWN = "Shutdown"
+    ERROR = "Error"
+
+
+# Am defining the worker functions outside of any class to avoid a pickling issues
 # (serialisation/deserialisation) maybe can be inside the class but idk.
 # works for now
-def transcriber_worker(
+def transcriber_entry(
     model_name: str,
     model_dir: str,
     n_threads: int,
     transcribing_queue: Queue,
     output_queue: Queue,
-    shared_dict,
-    log_queue,
-):
+    shared_dict: dict,
+    log_queue: Queue,
+) -> None:
+    """Entry point to transcriber worker process, wraps all work in try/except so that we can flag to the main process that an error has occurred"""
+    try:
+        shared_dict["status"] = TranscriberStatus.LOADING
+
+        # Set up logging queue first:
+        # Configure root logger in worker process
+        mp_logger = logging.getLogger("transcriber_process")
+        mp_logger.setLevel(logging.DEBUG)  # Set appropriate level
+
+        for handler in mp_logger.handlers[:]:
+            mp_logger.removeHandler(handler)
+
+        # Add queue handler for our code
+        mp_logger.addHandler(QueueHandler(log_queue))
+
+        # Redirect pywhispercpp logs to our log queue
+        # so that they can printed in main process and
+        # written to its log file
+        pwc_logger = logging.getLogger("pywhispercpp")
+        pwc_logger.setLevel(logging.DEBUG)  # Set appropriate level
+
+        # Remove any existing handlers to avoid duplication
+        for handler in pwc_logger.handlers[:]:
+            pwc_logger.removeHandler(handler)
+
+        # Add queue handler for pywhispercpp
+        pwc_logger.addHandler(QueueHandler(log_queue))
+
+        # Run the transcriber worker loop:
+        transcriber_main(
+            model_name,
+            model_dir,
+            n_threads,
+            transcribing_queue,
+            output_queue,
+            shared_dict,
+            mp_logger,
+        )
+
+    except Exception as e:
+        mp_logger.fatal(f"Error in transcriber process: {e}")
+        shared_dict["status"] = TranscriberStatus.ERROR
+        pass
+
+    shared_dict["status"] = TranscriberStatus.SHUTDOWN
+
+
+def transcriber_main(
+    model_name: str,
+    model_dir: str,
+    n_threads: int,
+    transcribing_queue: Queue,
+    output_queue: Queue,
+    shared_dict: dict,
+    mp_logger: logging.Logger,
+) -> None:
     """Worker process function that runs transcription tasks."""
-
-    # Set up logging queue first:
-    # Configure root logger in worker process
-    mp_logger = logging.getLogger("transcriber_process")
-    mp_logger.setLevel(logging.DEBUG)  # Set appropriate level
-    
-    # Remove any existing handlers to avoid duplication
-    for handler in mp_logger.handlers[:]:
-        mp_logger.removeHandler(handler)
-        
-    # Add queue handler
-    queue_handler = QueueHandler(log_queue)
-    mp_logger.addHandler(queue_handler)
-
-    # Set up logging to use the queue
     mp_logger.info(f"Loading {model_name} model in worker process")
 
     # Last ditch check to make sure the model exists otherwise pywhispercpp will try to download it
-    # which we really dont want to happen (we should handle this ourselves)
+    # which we really dont want to happen (we handle this ourselves in ModelManager)
     bin_file_name = f"ggml-{model_name}.bin"
     bin_file_path = Path(model_dir) / bin_file_name
     if not bin_file_path.exists():
         mp_logger.error(f"Model file {bin_file_path} does not exist")
+        shared_dict["status"] = TranscriberStatus.ERROR
         return
 
     # Load the model actually in this process
@@ -71,25 +125,42 @@ def transcriber_worker(
         print_progress=False,
         print_timestamps=False,
         redirect_whispercpp_logs_to=None,
-        suppress_non_speech_tokens=True,
     )
+
     mp_logger.info(f"Loaded {model_name} model in worker process")
 
     # Get system info and store it in the shared dictionary
     system_info = model.system_info()
+    logger.debug(f"Got system info")
 
     # Parse enabled features
-    enabled_features = {
-        part.split("=")[0].strip()
-        for part in system_info.split("|")
-        if part.split("=")[1].strip() == "1"
-    }
-    if enabled_features:
-        system_info_string = ", ".join(enabled_features)
-        shared_dict["system_info"] = system_info_string
+    enabled_features = []
+
+    # System info is a string of the form:
+    # FMA = 0 | NEON = 1 | ARM_FMA = 1 ... etc
+
+    # We want to extract the feature names where the value is 1
+    # I've noticed that this format changes subtly between versions of pywhispercpp
+    # so need to make sure not to let it bring down the process with uncaught exceptions
+    try:
+        for feature in system_info.split("|"):
+            if feature:
+                feature_parts = feature.split("=")
+                if len(feature_parts) == 2:
+                    feature_name = feature_parts[0].strip()
+                    feature_value = feature_parts[1].strip()
+                    if feature_value == "1":
+                        enabled_features.append(feature_name)
+    except Exception as e:
+        mp_logger.error(f"Error parsing system info, continuing anyway: {e}")
+        shared_dict["system_info"] = "<unknown>"
+    else:
+        shared_dict["system_info"] = ", ".join(enabled_features)
 
     # Process tasks until None sentinel is received
     mp_logger.info("Transcriber process started")
+
+    shared_dict["status"] = TranscriberStatus.RUNNING
     while True:
         try:
             # Get the next task with a timeout to keep the process responsive
@@ -97,12 +168,10 @@ def transcriber_worker(
 
             # Check for None sentinel (shutdown signal)
             if transcription is None:
-                mp_logger.info("Transcriber process received shutdown sentinel")
+                mp_logger.debug("Transcriber process received shutdown sentinel")
                 break
 
-            mp_logger.debug(
-                f"Transcriber process got audio data for {transcription.filepath}"
-            )
+            mp_logger.debug(f"Transcribing: {transcription.filepath}")
 
             # Process the audio
             transcription = transcribe_audio(transcription, model)
@@ -110,13 +179,12 @@ def transcriber_worker(
             # Add the result to the result queue
             output_queue.put(transcription)
 
-            mp_logger.debug(
-                f"Transcriber process completed transcription for {transcription.filepath}"
-            )
+            mp_logger.debug(f"Transcribed:  {transcription.filepath}")
 
         except Empty:
             continue  # No tasks available, just keep checking
         except Exception as e:
+            shared_dict["error_count"] += 1
             mp_logger.error(f"Error transcribing audio data: {e}")
 
 
@@ -168,18 +236,21 @@ class Transcriber:
         #      so it can be displayed in the UI
         self.manager = Manager()
         self.shared_dict = self.manager.dict()
-
+        self.shared_dict["status"] = TranscriberStatus.INITIALISED
+        self.shared_dict["error_count"] = 0
+        self.shared_dict["system_info"] = "Unknown"
 
         # Receive log messages from the worker process and log them in main process
         self.log_queue = Queue()
-        self.logging_handler = QueueListener(self.log_queue,
-                                             *logger.handlers,
-                                             respect_handler_level=True)
+        self.logging_handler = QueueListener(
+            self.log_queue, *logger.handlers, respect_handler_level=True
+        )
         self.logging_handler.start()
 
         # Start worker process
         self.worker_process = Process(
-            target=transcriber_worker,
+            name=f"transcriber_process",
+            target=transcriber_entry,
             args=(
                 model_name,
                 model_dir,
@@ -192,21 +263,25 @@ class Transcriber:
         )
         self.start()
 
+    @property
+    def is_alive(self) -> bool:
+        return self.worker_process.is_alive()
+
     def start(self) -> None:
         self.worker_process.start()
         logger.info("Transcriber worker process started")
 
-    def shutdown(self) -> None:
+    def stop(self) -> None:
         logger.info("Shutting down transcriber...")
         self.stop_event.set()
 
         # Send None sentinel to signal the worker process to stop
         self.transcribing_queue.put(None)
-        logger.debug("Sent shutdown sentinel to transcriber process")
 
         max_wait_time = 10.0  # seconds
 
         # Terminate the worker process if it's still running
+        logger.debug("Waiting for transcriber worker process to terminate")
         while self.worker_process.is_alive():
             # Give it a moment to shut down gracefully
             time.sleep(0.1)

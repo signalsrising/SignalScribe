@@ -11,10 +11,10 @@ import yaml
 
 from .transcription import Transcription
 from .defaults import COLORS_FILE_NAME
-from .logging import logger, console
+from .logging import logger
 
 
-POLLING_INTERVAL = 10
+POLLING_INTERVAL = 1
 
 
 class FolderWatcher:
@@ -64,7 +64,7 @@ class FolderWatcher:
         self.observer = PollingObserver(timeout=self.polling_interval)
 
     def run(self):
-        """Watch the folder in a loop. This method is meant to be run in a separate thread."""
+        """Watch the folder in a loop. This method runs in a separate thread."""
         handler = FolderWatcherHandler(
             queue=self.queue,
             folder=self.folder,
@@ -81,7 +81,6 @@ class FolderWatcher:
 
         while self.running:
             time.sleep(self.polling_interval)
-        
 
     def start(self):
         """Start the folder watcher in a separate thread."""
@@ -102,16 +101,16 @@ class FolderWatcher:
 
         logger.info("Stopping folder watcher...")
         self.running = False
-        
+
         if self.observer:
             self.observer.stop()
             self.observer.join()
-            
+
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5.0)
             if self.thread.is_alive():
                 logger.warning("Folder watcher thread did not terminate gracefully")
-        
+
         logger.info("Folder watcher stopped")
 
 
@@ -126,7 +125,6 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         shared_colors: dict = None,
         shared_colors_lock=None,
     ):
-        """Initialize the event handler."""
         self.queue = queue
         self.folder = folder
         self.shared_colors = shared_colors if shared_colors is not None else {}
@@ -203,15 +201,12 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         self.queue.put(Transcription(filepath))
 
     def on_modified(self, event: FileSystemEvent) -> None:
-        """Handle file modification events."""
         if os.path.basename(event.src_path) == COLORS_FILE_NAME:
             self._update_colors(event.src_path)
 
     def on_closed(self, event: FileSystemEvent) -> None:
-        """Handle file close events."""
         if os.path.basename(event.src_path) == COLORS_FILE_NAME:
             self._update_colors(event.src_path)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
-        """Handle file deletion events."""
         logger.info(f"File deleted: {event.src_path}")

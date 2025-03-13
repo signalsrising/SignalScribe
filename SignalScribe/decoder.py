@@ -48,7 +48,6 @@ class Decoder:
                         f"Decoder thread got task for {transcription.filepath}"
                     )
                     start_time = time.monotonic()
-                    logger.info(f"Decoding audio for {transcription.filepath}")
 
                     try:
                         # Decode the audio file
@@ -64,7 +63,7 @@ class Decoder:
                             # Log completion
                             duration = time.monotonic() - start_time
                             logger.info(
-                                f"Completed decoding of {transcription.filepath} in {duration:.2f}s"
+                                f"Decoded {transcription.filepath} in {duration:.2f}s"
                             )
 
                     except Exception as e:
@@ -126,7 +125,7 @@ class Decoder:
             finally:
                 os.remove(temp_file_path)
 
-    def shutdown(self) -> None:
+    def stop(self) -> None:
         logger.info("Shutting down decoder...")
         self.stop_event.set()
 

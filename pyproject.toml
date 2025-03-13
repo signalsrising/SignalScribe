@@ -1,6 +1,19 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = [
+    "setuptools>=61.0", 
+    "wheel", 
+    "pip-system-certs",
+]
 build-backend = "setuptools.build_meta"
+
+# Tell setuptools to use setup.py
+[tool.setuptools]
+py-modules = []
+
+# Exclude models directory from package discovery
+[tool.setuptools.packages.find]
+include = ["SignalScribe*"]
+exclude = ["models*", "_custom_build*", "custom_build*"]
 
 [project]
 name = "SignalScribe"
@@ -24,10 +37,11 @@ dependencies = [
     "watchdog",
     "rich",
     "pyyaml",
-    "pywhispercpp",
+    "numpy",
     "psutil",
     "requests",
     "beautifulsoup4",
+    "pywhispercpp @ git+https://github.com/absadiki/pywhispercpp.git",
 ]
 requires-python = ">=3.8"
 
@@ -42,9 +56,6 @@ cpu = []  # CPU-only version - pywhispercpp is now in main dependencies
 [project.urls]
 Homepage = "https://github.com/SignalsRising/SignalScribe"
 "Bug Tracker" = "https://github.com/SignalsRising/SignalScribe/issues"
-
-[tool.setuptools]
-packages = ["SignalScribe"] 
 
 [project.scripts]
 signalscribe = "SignalScribe.__main__:main"

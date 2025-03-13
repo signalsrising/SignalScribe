@@ -1,8 +1,8 @@
-import logging.handlers
 from pathlib import Path
 from rich.logging import RichHandler
-from typing import Optional, Any, Union
 import logging
+import logging.handlers
+
 from .loggingconsole import LoggingConsole
 
 # Set up logging
@@ -27,10 +27,10 @@ def log_name() -> str:
 
 
 def setup_logging(
-    log_file_path: Path,
+    log_file_path: str,
     verbose: bool = False,
-    silent: bool = False,
-) -> None:
+    silent: bool = False,  # Not implemented yet
+) -> str:
     """Configure logging with rich handler and optional file output.
 
     Args:
@@ -39,10 +39,20 @@ def setup_logging(
         param log_filepath: Path to log file (if None, only console logging is used)
               Set with --no-logging.
     """
+    # Convert log_file_path to Path object before anything else
+    log_file_path = Path(log_file_path)
 
     # Ensure log_file_path has been given:
     if not log_file_path:
         raise ValueError("log_file_path must be provided")
+
+    # If user provides a directory, put the log in there using
+    # the standard incrementing filename
+    if log_file_path.is_dir():
+        log_file_path = log_file_path / log_name()
+
+    # Check that the log file's parent dir exists and if not, make it
+    log_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Set base log level
     # (Actually not sure what effect this has since we set the handler levels below)
@@ -77,6 +87,10 @@ def setup_logging(
 
     # Cleanup old logs
     cleanup_old_logs(log_file_path.parent, keep_last_n=NUM_LOG_FILES_TO_KEEP)
+
+    logger.debug(f"Logging setup complete")
+
+    return log_file_path
 
 
 def cleanup_old_logs(
