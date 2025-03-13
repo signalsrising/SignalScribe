@@ -9,9 +9,8 @@
             "justMyCode": false,
             "args": [
                 "-V",
-                // "--recursive",
+                // "--list-models",
                 // "~/Development/Audio"
-                "--list-models",
                 "~/Development/Audio"
             ],
             "env": {
@@ -19,4 +18,4 @@
             }
         }
     ]
-} 
+}

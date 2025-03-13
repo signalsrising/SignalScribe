@@ -1,8 +1,13 @@
 """Utility functions and constants for SignalScribe."""
 
-import os
 import argparse
-from SignalScribe import __version__
+import platform
+import socket
+import re
+import uuid
+import json
+import psutil
+import logging
 from .defaults import (
     LOG_DIR_PATH,
     DEFAULT_MODEL,
@@ -11,6 +16,7 @@ from .defaults import (
     MODEL_DIR_PATH,
 )
 
+from SignalScribe import __version__
 
 def parse_args(args=None):
     """Parse command line arguments."""
@@ -175,3 +181,15 @@ def format_size(size_bytes: int) -> str:
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024.0
     return f"{size_bytes:.1f} TiB"
+
+
+def get_system_info() -> dict:
+    info={}
+    info['platform-version'] = platform.version()
+    info['architecture'] = platform.machine()
+    info['processor'] = platform.processor()
+    info['ram'] = format_size(round(psutil.virtual_memory().total))
+    info['ram_available'] = format_size(round(psutil.virtual_memory().available))
+    info['cpu_count'] = psutil.cpu_count()
+    
+    return info

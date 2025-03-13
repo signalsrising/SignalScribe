@@ -76,17 +76,20 @@ class ModelManager:
         
         # 3. Validate the model info file
         model_info_file_is_valid = validate_model_info(self._model_info)
-        if not model_info_file_is_valid:
-            logger.info(f"Model info file is invalid, will attempt to reload it")
+        if model_info_file_is_valid:
+            logger.info(f"Valid model info file found at {model_info_file}")
+        else:
+            logger.debug(f"Deleting invalid model info file: {model_info_file} (if it exists)")
             model_info_file.unlink(missing_ok=True) # delete the file as it's junk
 
 
         # 4. If user has requested to reload the model list from internet,
         #    fetch the available models from huggingface:
         if user_requested_model_list:
+            logger.debug("User requested model list regardless of whether it exists or not, attempting to fetch it from the internet")
             try:
                 self._model_info = fetch_available_models(self._model_dir)
-                self._model_info_file_updated = True
+                model_info_file_updated = True
             except KeyboardInterrupt:
                 logger.info("User interrupted model list re-download")
                 raise KeyboardInterrupt
@@ -108,6 +111,7 @@ class ModelManager:
         #    attempt to fetch the available models from huggingface:
 
         elif not model_info_file_is_valid:
+            logger.debug("Model info file is invalid, attempting to fetch it from the internet")
             try:
                 self._model_info = fetch_available_models(self._model_dir)
                 model_info_file_updated = True

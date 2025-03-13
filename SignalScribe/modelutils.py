@@ -153,9 +153,6 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
 
         # For each CoreML file, find the corresponding .bin file
         for i, coreml_model_file in enumerate(coreml_compatible_models):
-            # TODO: REMOVE:
-            if i > 2:
-                break
             # Extract base model name by removing the "-encoder.mlmodelc.zip" suffix
             model_name = coreml_model_file.replace("-encoder.mlmodelc.zip", "")
             display_name = model_name.replace("ggml-", "")
@@ -172,10 +169,12 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
                 coreml_url = f"{base_download_url}/{coreml_model_file}"
 
                 # Check our models dir to see if the files are present
-                console.print(f"Checking for {bin_model_file} in {model_dir}")
+                logger.debug(f"Checking for {bin_model_file} in {model_dir}")
                 bin_filepath = model_dir / bin_model_file
 
                 bin_downloaded = bin_filepath.exists()
+
+                logger.debug(f"{bin_model_file} exists: {bin_downloaded}")
 
                 coreml_models[display_name] = {}
                 coreml_models[display_name]["bin"] = {
@@ -197,9 +196,11 @@ def fetch_available_models(model_dir: Path) -> Dict[str, Dict[str, str]]:
                     coreml_filepath = model_dir / coreml_model_file
                     coreml_downloaded = coreml_filepath.exists()
 
+                    logger.debug(f"{coreml_model_file} exists: {coreml_downloaded}")
+
                     coreml_models[display_name]["coreml"] = {
-                        "url": coreml_url,
                         "filename": coreml_model_file.replace(".zip", ""),
+                        "url": coreml_url,
                         "size": None,
                         "sha256": None,
                         "downloaded": coreml_downloaded,
@@ -291,16 +292,13 @@ def read_model_info_file(file_path: Path) -> Dict:
         return json.loads(f.read())
 
 
-def write_model_info_file(file_path: Path, model_info: Dict) -> bool:
+def write_model_info_file(file_path: Path, model_info: Dict) -> None:
     """
     Write a downloaded model info out to a JSON file.
 
     Args:
         file_path: Path where the JSON file should be written
         model_info: Model info dictionary to write to the file
-
-    Returns:
-        True if successful, False otherwise
     """
     logger.debug(f"Writing model info JSON file to {file_path}")
 
@@ -324,19 +322,26 @@ def validate_model_info(model_info: Dict) -> bool:
     if not model_info:
         return False
 
-    required_keys = ["url", "size", "sha256", "downloaded"]
+    required_keys = ["filename", "url", "size", "sha256", "downloaded"]
 
     # Check that each model has a bin entry, and if on mac, also a coreml entry
     for model_name, model_data in model_info.items():
         if "bin" not in model_data:
             return False
-        if platform.system() == "Darwin" and "coreml" not in model_data:
-            return False
+        
         # check that each model_data entry has all of the following:
-        # url, size, sha256, and downldoaed bool:
+        # url, size, sha256, and downloaded bool:
         for key in required_keys:
-            if key not in model_data:
+            if key not in model_data["bin"]:
                 return False
+        
+        if platform.system() == "Darwin":
+            if "coreml" not in model_data:
+                return False
+            for key in required_keys:
+                if key not in model_data["coreml"]:
+                    return False
+        
     return True
 
 def validate_file_hash(file_path: Path, expected_hash: str) -> bool:

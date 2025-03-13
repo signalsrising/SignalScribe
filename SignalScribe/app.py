@@ -22,6 +22,7 @@ from .sdrtrunk import SDRTrunkDetector
 from .trackedqueue import TrackedQueue
 from .transcriber import Transcriber
 from .version import __version__
+from .utils import get_system_info, nested_dict_to_string
 from .watcher import FolderWatcher
 
 
@@ -74,6 +75,9 @@ class SignalScribeApp:
 
         self._set_up_recording_folder()
         self._set_up_csv_file()
+
+        # For troubleshooting from 3rd party log files:
+        logger.debug(nested_dict_to_string(get_system_info()))
 
         # Initialize model management - checks for required models and downloads them if needed
         model_dir = self.args.model_dir if hasattr(self.args, "model_dir") else None
@@ -242,6 +246,9 @@ class SignalScribeApp:
 
     def _build_status_display(self):
         """Create a rich progress display for queue status."""
+
+        logger.debug("Building status display")
+
         progress = Progress(
             SpinnerColumn(),
             TextColumn("[bold]{task.description}"),
@@ -277,9 +284,14 @@ class SignalScribeApp:
 
     def _status_loop(self):
         # Create the progress display once
+
         progress = self._build_status_display()
 
+        logger.debug("Entering status loop")
+
         with Live(progress, console=console, refresh_per_second=10) as live:
+            logger.debug("Live display created")
+
             while not progress.finished:
                 # Get current queue sizes
                 decoding_queue_size = self.decoding_queue.size()
@@ -315,6 +327,8 @@ class SignalScribeApp:
                     else:
                         progress.update(self.transcribing_task_id, visible=False)
 
+                logger.debug("Updating status display")
+
                 sleep(0.1)
 
     def _print_banner(self) -> None:
@@ -332,23 +346,29 @@ class SignalScribeApp:
 
         # Try to get system info from transcriber's shared dictionary
         # Wait a short time for the transcriber process to initialise and populate the shared dict
-        max_wait = 3.0  # Maximum seconds to wait
+        max_wait = 20.0  # Maximum seconds to wait
         wait_interval = 0.1
         waited = 0
 
-        while waited < max_wait:
-            # Check if transcriber exists and has populated the shared dict
-            if (
-                hasattr(self, "transcriber")
-                and self.transcriber
-                and "system_info" in self.transcriber.shared_dict
-            ):
-                system_info_string = self.transcriber.shared_dict["system_info"]
-                break
+        system_info_string = None
+
+        with console.status("Loading transcriber model..."):
+            while waited < max_wait:
+                # Check if transcriber exists and has populated the shared dict
+                if (
+                    hasattr(self, "transcriber")
+                    and self.transcriber
+                    and "system_info" in self.transcriber.shared_dict
+                ):
+                    system_info_string = self.transcriber.shared_dict["system_info"]
+                    break
 
             # Wait a bit and try again
             sleep(wait_interval)
             waited += wait_interval
+
+        if system_info_string is None:
+            raise Exception("Transcriber process failed to load")
 
         grid = Table.grid(padding=(0, 2))
 
@@ -386,8 +406,13 @@ class SignalScribeApp:
             # Start the watcher
             self._build_status_display()
 
+            logger.debug("Starting watcher")
             self.watcher.run()
 
+            logger.debug("Starting transcriber")
+            self.transcriber.start()
+
+            logger.debug("Starting status loop")    
             self._status_loop()
             return 0
 

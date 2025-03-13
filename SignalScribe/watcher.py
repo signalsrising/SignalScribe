@@ -5,6 +5,7 @@ from watchdog.observers.polling import PollingObserver
 from yaml import YAMLError, SafeLoader
 import os
 import rich.color
+import threading
 import time
 import yaml
 
@@ -49,6 +50,8 @@ class FolderWatcher:
         self.polling_interval = polling_interval
         self.shared_colors = shared_colors if shared_colors is not None else {}
         self.shared_colors_lock = shared_colors_lock
+        self.running = False
+        self.thread = None
 
         try:
             if not self.polling:
@@ -61,8 +64,7 @@ class FolderWatcher:
         self.observer = PollingObserver(timeout=self.polling_interval)
 
     def run(self):
-        """Start watching the folder with the specified handler."""
-
+        """Watch the folder in a loop. This method is meant to be run in a separate thread."""
         handler = FolderWatcherHandler(
             queue=self.queue,
             folder=self.folder,
@@ -77,15 +79,40 @@ class FolderWatcher:
         self.observer.start()
         logger.info(f"Started watching folder: {self.folder}")
 
-        try:
-            while True:
-                time.sleep(self.polling_interval)
-        except KeyboardInterrupt:
-            logger.info("Stopping folder watcher...")
-            self.observer.stop()
-            raise KeyboardInterrupt
+        while self.running:
+            time.sleep(self.polling_interval)
+        
 
-        self.observer.join()
+    def start(self):
+        """Start the folder watcher in a separate thread."""
+        if self.thread and self.thread.is_alive():
+            logger.warning("Folder watcher is already running")
+            return
+
+        self.running = True
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        logger.info("Folder watcher thread started")
+
+    def stop(self):
+        """Stop the folder watcher thread."""
+        if not self.running:
+            logger.warning("Folder watcher is not running")
+            return
+
+        logger.info("Stopping folder watcher...")
+        self.running = False
+        
+        if self.observer:
+            self.observer.stop()
+            self.observer.join()
+            
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=5.0)
+            if self.thread.is_alive():
+                logger.warning("Folder watcher thread did not terminate gracefully")
+        
+        logger.info("Folder watcher stopped")
 
 
 class FolderWatcherHandler(PatternMatchingEventHandler):
