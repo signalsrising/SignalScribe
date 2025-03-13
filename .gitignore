@@ -161,9 +161,40 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# Mac OS junk
+.DS_Store
+__MACOSX/
+
+# Models
+models/
+*.bin
+*.mlmodelc
 
 # Test data
 /Test
 *.mp3
 *.m4a
 *.wav
+
+# Python package specific
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST

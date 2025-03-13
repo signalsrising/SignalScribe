@@ -1,0 +1,7 @@
+.git
+models/
+*.bin
+*.mlmodelc
+*.wav
+*.mp3
+*.m4a

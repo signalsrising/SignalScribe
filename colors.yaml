@@ -1,0 +1,40 @@
+# SignalScribe color highlighting example
+# ---------------------------------------
+#
+# Supported color names can be found here: https://rich.readthedocs.io/en/stable/appendix/colors.html
+#
+# You can add additional highlight colors by adding the name with a colon after it, like "orange4:"
+# Add new items to be highlighted by prefixing them with a hyphen and a space, like "- shots fired"
+#
+# Highlights take precedence the higher up in a file they are.
+# For instance 'one' will be highlighted green, despite the fact that it's also included under 'blue:', because green comes higher up in the file than blue.
+#
+# Highlighting is case insensitive, so Thirteen, THIRTEEN and thirteen will all be highlighted purple according to this example
+# 
+# Highlighting happens by phrase, rather than by word. So 'five six seven' will be highlighted only if all 3 words occur together
+
+
+green:
+- one
+- two
+- three
+- test-test
+
+red:
+- four
+- five six seven
+- 8
+- 9 10
+
+yellow:
+- ELEVEN
+
+purple:
+- 12
+- ThirtEEN
+
+blue:
+- one
+- two
+- three
+
