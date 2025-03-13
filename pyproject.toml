@@ -41,7 +41,7 @@ dependencies = [
     "psutil",
     "requests",
     "beautifulsoup4",
-    "pywhispercpp @ git+https://github.com/absadiki/pywhispercpp.git",
+    "pywhispercpp @ git+https://github.com/signalsrising/pywhispercpp.git",
 ]
 requires-python = ">=3.8"
 
