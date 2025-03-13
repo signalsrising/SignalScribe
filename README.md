@@ -14,22 +14,22 @@ Depending on your hardware, you have to manually prepend the following to the pi
 
 - NVIDIA GPU with CUDA:
   ```
-  GGML_CUDA=1 pip install "signalscribe"
+  GGML_CUDA=1 pip install git+https://github.com/signalsrising/signalscribe.git
   ```
 
 - AMD/Intel GPU with Vulkan:
   ```
-  GGML_VULKAN=1 pip install "signalscribe"
+  GGML_VULKAN=1 pip install git+https://github.com/signalsrising/signalscribe.git
   ```
 
 - Apple Silicon with Neural Engine:
   ```
-  GGML_COREML=1 pip install "signalscribe"
+  GGML_COREML=1 pip install git+https://github.com/signalsrising/signalscribe.git
   ```
 
 - CPU only (for compatibility):
   ```
-  pip install "signalscribe"
+  pip install git+https://github.com/signalsrising/signalscribe.git
   ```
   
 For hardware acceleration to work, you need to have the necessary drivers and libraries installed.
