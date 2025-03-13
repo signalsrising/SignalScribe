@@ -180,7 +180,7 @@ class SignalScribeApp:
 
         # Create all possible tasks but hide them initially
         self.listening_task_id = progress.add_task(
-            "[blue]Listening for recordings...",
+            f"[blue]Monitoring {self.folder_path} for audio files...[/blue][dim](press CTRL+C to exit)[/dim]",
             total=None,  # Indeterminate total
             status="",
             visible=False,
@@ -251,7 +251,7 @@ class SignalScribeApp:
         """Print the intro message."""
         console.print(
             Panel(
-                f"[bold][bright_cyan]SignalScribe\n[cyan]by Signals Rising[/bold]\n[bright_black]Version {__version__}",
+                f"[bold][bright_cyan]SignalScribe[/bold]\n[cyan]by Signals Rising\n[bright_black]Version {__version__}",
                 expand=False,
             )
         )
@@ -280,12 +280,14 @@ class SignalScribeApp:
 
         grid.add_column(justify="right", style="yellow", no_wrap=True)
         grid.add_column()
+        grid.add_column(style="dim", no_wrap=True)
 
-        grid.add_row("Model", self.args.model)
-        grid.add_row("Compute Info:", system_info_string)
-        grid.add_row("CPU Threads", f"{self.args.threads}")
-        grid.add_row("CSV File", str(self.csv_filepath))
-        grid.add_row("Log File", str(self.log_filepath))
+        grid.add_row("Model", self.args.model, "Set with --model")
+        grid.add_row("Compute", system_info_string)
+        grid.add_row("CPU Threads", f"{self.args.threads}", "Set with --threads")
+        grid.add_row("CSV File", str(self.csv_filepath), "Set with --csv-filepath")
+        grid.add_row("Log File", str(self.log_filepath), "Set with --log-filepath")
+        grid.add_row("Monitoring", str(self.args.folder))
 
         console.print(grid)
         console.print("")

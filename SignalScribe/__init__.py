@@ -14,3 +14,6 @@ if env_file.exists():
             if "=" in line:
                 key, value = line.strip().split("=", 1)
                 os.environ[key] = value
+
+# Import the SDRTrunkDetector class for external use
+from .sdrtrunk import SDRTrunkDetector

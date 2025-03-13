@@ -25,6 +25,7 @@ dependencies = [
     "rich",
     "pyyaml",
     "pywhispercpp",
+    "psutil",
 ]
 requires-python = ">=3.8"
 

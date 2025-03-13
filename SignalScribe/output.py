@@ -80,7 +80,7 @@ class Output:
                     )
 
                 # Print the results:
-                console.print(f"{added_timestamp}", end="")
+                console.print(f"{added_timestamp}", end=" | ")
                 console.print(
                     f"[blue]{filename}", style=f"link {filepath}"
                 )
@@ -89,7 +89,7 @@ class Output:
                     console.print(
                         Padding(
                             "<no transcription>",
-                            (0, len(added_timestamp)),
+                            (0, len(added_timestamp) + 3),
                         )
                     )
                     continue
@@ -101,7 +101,7 @@ class Output:
                 console.print(
                     Padding(
                         highlighted_text,
-                        (0, len(added_timestamp)),
+                        (0, len(added_timestamp) + 3),
                     )
                 )
 

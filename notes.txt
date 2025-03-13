@@ -1,0 +1,12 @@
+plutil -p ~/Library/Preferences/com.apple.java.util.prefs.plist | grep TESTESTTEST1234
+
+{
+  "/" => {
+    "io/" => {
+      "github/" => {
+        "dsheirer/" => {
+        }
+      }
+    }
+  }
+}

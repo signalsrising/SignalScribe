@@ -100,7 +100,7 @@ def transcribe_audio(
     # Use the decoded audio data for transcription
     segments = model.transcribe(transcription.audio, print_progress=False)
 
-    transcription.text = "".join(segment.text for segment in segments).strip()
+    transcription.text = " ".join(segment.text for segment in segments).strip()
     transcription.duration = time.monotonic() - start_time
 
     return transcription
