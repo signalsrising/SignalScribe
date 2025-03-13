@@ -176,6 +176,10 @@ models/
 *.m4a
 *.wav
 
+# VSCode files:
+*.vscode
+*.cursorignore
+
 # Python package specific
 *.pyc
 __pycache__/
