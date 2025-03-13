@@ -87,9 +87,6 @@ def main():
     except UserException as e:
         abort(f"Quitting, reason: {e}")
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
         abort("Error setting up SignalScribe, aborting", e)
 
     # Finally, run the application
