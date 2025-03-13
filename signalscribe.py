@@ -13,12 +13,12 @@ import time
 from datetime import datetime
 import logging
 from faster_whisper import WhisperModel
-from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEvent, PatternMatchingEventHandler
 import csv
 
 APP_NAME = "SignalScribe"
-VERSION = "0.3"
+VERSION = "0.4"
 
 COMPUTE_TYPE = "float32"
 DEFAULT_MODEL = "medium.en"
@@ -37,7 +37,7 @@ class FolderWatcher:
     def __init__(self, options: list):
 
         self.options = options
-        self.observer = Observer()
+        self.observer = PollingObserver(timeout=15)
 
     def run(self):
         event_handler = FolderWatcherHandler(self.options)
@@ -78,7 +78,7 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         # Load model:
         try:
             with console.status("Loading Whisper") as status:
-                self.model = WhisperModel(options.model, device=device, compute_type=COMPUTE_TYPE, cpu_threads=options.threads)
+                self.model = WhisperModel(options.model, device=device, compute_type=COMPUTE_TYPE, cpu_threads=options.threads, download_root="/home/cyberlord/Desktop/SignalScribe/cache/")
         except Exception as e:
             console.print(f"[red bold]Fatal error loading Whisper: {e}")    
             quit()
@@ -141,15 +141,16 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
             console.print(f"Updated highlight settings from: {colors_file_path}")
     
     def on_closed(self, event: FileSystemEvent) -> None:
+    #    console.print(f"[yellow]File closed: {event.src_path}")
         file_name_ext = os.path.basename(event.src_path) # file name with extention
-        
         if file_name_ext == COLORS_SETTINGS_NAME:
             self.update_colors(event.src_path)
-    
-    
-    
+
+    #def on_modified(self, event: FileSystemEvent) -> None:  
+    #    console.print(f"[yellow]File modified: {event.src_path}")
+
     def on_created(self, event: FileSystemEvent) -> None:
-        # logger.info(f"Detected new file {event.src_path}")
+    #    console.print(f"[yellow]Detected new file {event.src_path}")
         file_name_ext = os.path.basename(event.src_path) # file name with extention
         
         if file_name_ext == COLORS_SETTINGS_NAME:
@@ -161,14 +162,15 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         file_datetime_tag = f"[{file_datetime}] "
 
         file_name = os.path.splitext(file_name_ext)[0] # just the file name, no path, no extension
-        file_uri = pathlib.Path(event.src_path).absolute().as_uri()
+        file_uri = pathlib.Path(os.path.abspath(event.src_path)).as_uri()
         
 
         try:
-            console.log(f"Transcribing file: {event.src_path}")
+            # console.print(f"Transcribing file: {event.src_path}")
+            # time.sleep(2)
             segments, info = self.model.transcribe(event.src_path, beam_size=5, vad_filter=True)
         except ValueError as e:
-            console.print(f"Error transcribing potentially empty file: {file_name}", style="red")
+            console.print(f"Error transcribing potentially empty file: {file_name}: {e}", style="red")
             return
 
         text = ""
@@ -187,8 +189,13 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
                 writer.writerow([file_datetime,event.src_path,info.duration,text])
         except Exception as e:
             console.print(f"[red]Error writing to CSV file: {e}")
-
+            
+        # Print our results:
+        console.print(f"{file_datetime_tag}", end="")
+        console.print(f"[blue]{file_name}", style=f"link {file_uri}")
+        
         if not text:
+            console.print(Padding("<no transcription>",(0,len(file_datetime_tag))))
             return
 
         # Lower-case copy of our transcription that's used for searching for phrases to highlight.
@@ -217,9 +224,6 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
                     tagged_phrase = opening_tag + phrase + closing_tag
                     search_text = re.compile(re.escape(tagged_phrase), re.IGNORECASE).sub(" " * len(tagged_phrase), text)
                     
-        # Print our results:
-        console.print(f"{file_datetime_tag}", end="")
-        console.print(f"[blue]{file_name}", style=f"link {file_uri}")
         console.print(Padding(text,(0,len(file_datetime_tag)), style="bold"))
 
         elapsed = time.monotonic() - start_time
@@ -313,8 +317,11 @@ def main(command_line=None):
     options.csv_filepath = folder_path / options.csv_filename
 
     if options.verbose:
-        console.log("Verbose mode")
-        logging.basicConfig()
+        logging.basicConfig(level="DEBUG",
+                            format="%(message)s",
+                            datefmt='%Y-%m-%d %H:%M:%S',
+                            handlers=[RichHandler(rich_tracebacks=True)])
+                                # handlers=[logging.FileHandler(options.log_filepath), RichHandler(rich_tracebacks=True)])
         logging.getLogger("faster_whisper").setLevel(logging.DEBUG)
 
     # logger.debug(f"Logging:  {options.log_filepath}")
