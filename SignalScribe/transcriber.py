@@ -242,9 +242,7 @@ class Transcriber:
 
         # Receive log messages from the worker process and log them in main process
         self.log_queue = Queue()
-        self.logging_handler = QueueListener(
-            self.log_queue, *logger.handlers, respect_handler_level=True
-        )
+        self.logging_handler = QueueListener(self.log_queue, *logger.handlers, respect_handler_level=True)
         self.logging_handler.start()
 
         # Start worker process

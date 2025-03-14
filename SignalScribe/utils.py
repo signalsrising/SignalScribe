@@ -1,13 +1,14 @@
 """Utility functions and constants for SignalScribe."""
 
-import argparse
 from argparse import Namespace
+from typing import Optional
+import argparse
+import os
 import platform
 import psutil
+import subprocess
 import traceback
-import os
-
-from .logging import console
+from pathlib import Path
 
 from .defaults import (
     LOG_DIR_PATH,
@@ -25,10 +26,8 @@ class UserException(Exception):
     pass
 
 
-def check_ffmpeg():
+def get_ffmpeg_version() -> Optional[str]:
     try:
-        import subprocess
-
         # Run ffmpeg -version to check if it's available
         result = subprocess.run(
             ["ffmpeg", "-version"],
@@ -39,28 +38,12 @@ def check_ffmpeg():
         )
 
         if result.returncode != 0:
-            console.print(
-                "[bold red]Error: ffmpeg is not installed or not in the PATH.[/bold red]"
-            )
-            console.print(
-                "[yellow]Please install ffmpeg before running SignalScribe.[/yellow]"
-            )
-            console.print(
-                "[dim]Visit https://ffmpeg.org/download.html for installation instructions.[/dim]"
-            )
-            sys.exit(1)
+            return None
 
     except FileNotFoundError:
-        console.print(
-            "[bold red]Error: ffmpeg is not installed or not in the PATH.[/bold red]"
-        )
-        console.print(
-            "[yellow]Please install ffmpeg before running SignalScribe.[/yellow]"
-        )
-        console.print(
-            "[dim]Visit https://ffmpeg.org/download.html for installation instructions.[/dim]"
-        )
-        sys.exit(1)
+        return None
+
+    return result.stdout.split("ffmpeg version ")[1].split(" ")[0]
 
 
 def compact_traceback(exc_type, exc_value, exc_traceback):
@@ -76,9 +59,7 @@ def compact_traceback(exc_type, exc_value, exc_traceback):
 
 def parse_args(args=None) -> Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description=f"SignalScribe {__version__} - Automatic Audio Transcription"
-    )
+    parser = argparse.ArgumentParser(description=f"SignalScribe {__version__} - Automatic Audio Transcription")
 
     parser.add_argument(
         "folder",
@@ -204,9 +185,34 @@ def parse_args(args=None) -> Namespace:
     return parser.parse_args(args)
 
 
-def nested_dict_to_string(
-    nested_dict: dict, indent: int = 2, include_none: bool = False
-) -> str:
+def has_permission(path: Path) -> bool:
+    """
+    Check if the user has permission to write to the given path.
+
+    Args:
+        path: Path to check for write permission
+
+    Returns:
+        bool: True if the user has write permission, False otherwise
+    """
+    if path.is_file() or not path.exists():
+        # If path is a file, or is a dir that doesn't exist,
+        # check if we can write to its parent directory
+        # We call it recursively in case user has provided long
+        # chain of directories
+        return has_permission(path.parent)
+
+    test_file_path = path / f".signalscribe_write_test_{os.getpid()}"
+    try:
+        test_file_path.touch()  # Create empty file here
+        test_file_path.unlink()  # Immediately remove it
+        return True  # If we get this far we must have write permission
+    except Exception:
+        # If we get any errors then we don't have write permission
+        return False
+
+
+def nested_dict_to_string(nested_dict: dict, indent: int = 2, include_none: bool = False) -> str:
     """Recursively convert a nested dictionary to a string with increasing indent."""
     result = ""
     for key, value in nested_dict.items():
@@ -234,9 +240,7 @@ def format_size(size_bytes: int) -> str:
 
 def get_system_info() -> list[str]:
     os_string = platform.version()
-    cpu_string = (
-        f"{psutil.cpu_count()} cores, {platform.processor()} ({platform.machine()})"
-    )
+    cpu_string = f"{psutil.cpu_count()} cores, {platform.processor()} ({platform.machine()})"
     ram_total = format_size(round(psutil.virtual_memory().total))
     ram_available = format_size(round(psutil.virtual_memory().available))
 

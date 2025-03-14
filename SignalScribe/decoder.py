@@ -7,7 +7,7 @@ import numpy as np
 from queue import Empty  # Keep this for exception handling
 from threading import Thread, Event
 
-from .logging import logger, console
+from .logging import logger
 
 
 class Decoder:
@@ -30,9 +30,7 @@ class Decoder:
         self.decoder_thread.start()
         logger.info("Decoder thread started")
 
-    def _decode_loop(
-        self, decoding_queue, transcribing_queue, stop_event: Event
-    ) -> None:
+    def _decode_loop(self, decoding_queue, transcribing_queue, stop_event: Event) -> None:
         """Decode audio files from the queue until stopped."""
         while not stop_event.is_set():
             try:
@@ -44,9 +42,7 @@ class Decoder:
 
                 # Process the file if we're not stopping
                 if not stop_event.is_set():
-                    logger.debug(
-                        f"Decoder thread got task for {transcription.filepath}"
-                    )
+                    logger.debug(f"Decoder thread got task for {transcription.filepath}")
                     start_time = time.monotonic()
 
                     try:
@@ -61,10 +57,8 @@ class Decoder:
                             transcribing_queue.put(transcription)
 
                             # Log completion
-                            duration = time.monotonic() - start_time
-                            logger.info(
-                                f"Decoded {transcription.filepath} in {duration:.2f}s"
-                            )
+                            decoding_time = time.monotonic() - start_time
+                            logger.info(f"Decoded {transcription.filepath} in {decoding_time:.2f}s")
 
                     except Exception as e:
                         logger.error(f"Failed to decode {transcription.filepath}: {e}")

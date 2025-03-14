@@ -4,15 +4,16 @@ import logging
 import logging.handlers
 
 from .loggingconsole import LoggingConsole
-
-# Set up logging
-logger = logging.getLogger("rich")
+from .utils import has_permission, UserException
 from .defaults import (
     LOG_NAME,
     CONSOLE_OUTPUT_LOG_LEVEL,
     NUM_LOG_FILES_TO_KEEP,
 )
 from datetime import datetime
+
+# Set up logging
+logger = logging.getLogger("rich")
 
 # Create console with the custom class
 console = LoggingConsole(logger=logger, highlight=False)
@@ -46,6 +47,10 @@ def setup_logging(
     if not log_file_path:
         raise ValueError("log_file_path must be provided")
 
+    # Check if we have write permissions to the log file or its parent directory
+    if not has_permission(log_file_path):
+        raise UserException(f"You don't have permission to write a log file to: {log_file_path}")
+
     # If user provides a directory, put the log in there using
     # the standard incrementing filename
     if log_file_path.is_dir():
@@ -72,16 +77,12 @@ def setup_logging(
     # Log everything, including console prints, to the file
     file_handler.setLevel(LoggingConsole.CONSOLE)
 
-    file_handler.setFormatter(
-        logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s")
-    )
+    file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s"))
     logger.addHandler(file_handler)
 
     # Add console handler if verbose is True
     if verbose:
-        rich_handler = RichHandler(
-            rich_tracebacks=True, markup=True, show_time=False, console=console
-        )
+        rich_handler = RichHandler(rich_tracebacks=True, markup=True, show_time=False, console=console)
         rich_handler.setLevel(CONSOLE_OUTPUT_LOG_LEVEL)
         logger.addHandler(rich_handler)
 

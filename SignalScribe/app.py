@@ -22,9 +22,10 @@ from .sdrtrunk import SDRTrunkDetector
 from .trackedqueue import TrackedQueue
 from .transcriber import Transcriber, TranscriberStatus
 from .version import __version__
-from .utils import UserException, get_system_info
+from .utils import UserException, get_system_info, has_permission
 from .watcher import FolderWatcher
 from .defaults import DEFAULT_MODEL
+
 
 class SignalScribeApp:
     """Main application class that manages all pretty much everything apart from setting up logging."""
@@ -59,20 +60,18 @@ class SignalScribeApp:
     def __init__(self, args):
         """Initialize the application with command line arguments."""
         self.args = args  # Command line arguments set by user
-        self.monitoring_sdrtrunk = False  # Is app automatically monitoring SDRTrunk?
+        self._monitoring_sdrtrunk = False  # Is app automatically monitoring SDRTrunk?
 
         self.running = False
 
         # Properties:
-        self.csv_file_path = None
-        self.log_file_path = None
-        self.recording_dir = None
+        self._csv_file_path = None
+        self._log_file_path = None
+        self._recording_dir = None
 
         # Shared state between components
         self.shared_colors = {}  # Dictionary to share colors between watcher and output
-        self.shared_colors_lock = (
-            threading.Lock()
-        )  # Lock to protect access to shared_colors
+        self.shared_colors_lock = threading.Lock()  # Lock to protect access to shared_colors
 
         # Threads:
         self.model_manager = None  # Checks for models and downloads them if needed
@@ -107,9 +106,7 @@ class SignalScribeApp:
 
         # If a model was specified on the command line, use it
         if hasattr(self.args, "model") and self.args.model:
-            logger.debug(
-                f"Attempting to use model specified on command line: {self.args.model}"
-            )
+            logger.debug(f"Attempting to use model specified on command line: {self.args.model}")
             try:
                 self.model_manager.selected_model = self.args.model
             except ValueError as e:
@@ -119,7 +116,7 @@ class SignalScribeApp:
 
         else:
             # Otherwise use the default model
-            logger.debug(f"Using default model")
+            logger.debug("Using default model")
             self.model_manager.selected_model = DEFAULT_MODEL
 
         # Log the resolved paths
@@ -144,7 +141,7 @@ class SignalScribeApp:
         # Initialize watcher - watches for new files in the folder and adds them to the decoding queue
         self.watcher = FolderWatcher(
             queue=self.decoding_queue,
-            folder=self.recording_dir,
+            folder=self._recording_dir,
             formats=self.args.formats,
             shared_colors=self.shared_colors,
             shared_colors_lock=self.shared_colors_lock,
@@ -192,109 +189,108 @@ class SignalScribeApp:
 
         # If folder is not specified, try to get SDRTrunk recording directory
         if not self.args.folder:
-            logger.info(
-                "No folder specified, attempting to use SDRTrunk recording directory"
-            )
+            logger.info("No folder specified, attempting to use SDRTrunk recording directory")
             detector = SDRTrunkDetector()
 
             recording_dir = detector.get_recording_directory()
 
             if recording_dir:
-                self.recording_dir = recording_dir
+                # Check if we have write permissions to the recording directory
+                if not has_permission(recording_dir):
+                    raise UserException(
+                        f"You don't have write permission for SDRTrunk recording directory: {recording_dir}"
+                    )
 
-                logger.info(
-                    f"Monitoring SDRTrunk recording directory: {self.recording_dir}"
-                )
+                self._recording_dir = recording_dir
+                self._monitoring_sdrtrunk = True
+
+                logger.info(f"Monitoring SDRTrunk recording directory: {self._recording_dir}")
 
                 # Warn if SDRTrunk isn't running:
                 if not detector.get_process():
-                    logger.warning(
-                        "SDRTrunk is not running, monitoring recording directory anyway"
-                    )
+                    logger.warning("SDRTrunk isn't running, monitoring its directory anyway")
 
-                self.monitoring_sdrtrunk = True
                 return
             else:
-                console.print(
-                    "[red]Error:[/red] No folder specified and could not find SDRTrunk recording directory."
-                )
+                console.print("[red]Error:[/red] No folder specified and could not find SDRTrunk recording directory.")
                 console.print("Please either:")
                 console.print("1. Specify a folder with --folder")
                 console.print("2. Ensure SDRTrunk is installed and configured")
                 console.print("   (SDRTrunk does not need to be running)")
 
                 # This is fatal error by now so let's raise an exception and let the parent caller handle die gracefully...
-                raise FileNotFoundError(
-                    "No folder specified and could not find SDRTrunk recording directory."
-                )
+                raise FileNotFoundError("No folder specified and could not find SDRTrunk recording directory.")
 
         else:
             # Check that the folder exists, and if not, prompt the user to create it
-            self.recording_dir = Path(self.args.folder).expanduser().resolve()
+            self._recording_dir = Path(self.args.folder).expanduser().resolve()
 
-            if not self.recording_dir.exists():
+            if not self._recording_dir.exists():
                 if Confirm.ask(
-                    f"[red]The folder you requested to observe does not exist[/red]\n Would you like to create it?",
+                    "[red]The folder you requested to observe does not exist[/red]\n Would you like to create it?",
                     default=True,
                 ):
-                    logger.debug(f"Creating folder: {self.recording_dir}")
+                    logger.debug(f"Creating folder: {self._recording_dir}")
 
-                    # Don't catch any exceptions here, let the caller deal with it
-                    self.recording_dir.mkdir(parents=True, exist_ok=True)
-                    return
-
-                else:
-                    raise FileNotFoundError(
-                        f"The specified folder does not exist: {self.recording_dir}"
-                    )
+                    self._recording_dir.mkdir(parents=True, exist_ok=True)
 
             # Check that the folder is a directory, and if not (i.e. a file), prompt the user to use its parent directory
-            if not self.recording_dir.is_dir():
-                parent_dir = self.recording_dir.parent
+            if not self._recording_dir.is_dir():
+                parent_dir = self._recording_dir.parent
                 if Confirm.ask(
                     f"[red]The given path is not a directory[/red]\n Would you like to use its parent directory instead? {parent_dir}",
                     default=True,
                 ):
-                    self.recording_dir = parent_dir
+                    self._recording_dir = parent_dir
                 else:
-                    raise FileExistsError(
-                        f"The specified path is is a file, not a directory: {self.recording_dir}"
-                    )
+                    raise FileExistsError(f"The specified path is is a file, not a directory: {self._recording_dir}")
+
+        # Check if we have write permissions to the recording directory
+        if not has_permission(self._recording_dir):
+            raise UserException(f"You don't have write permission for directory: {self._recording_dir}")
 
     def _set_up_csv_file(self):
         """
         Set up the CSV file:
         1. If CSV file is not specified, use self.args.folder/signalscribe.csv.
         2. If CSV file is specified, check its parent directory exists. If not, prompt the user to create it.
+        3. If a directory is specified, we put the CSV file there and name it after the recording directory.
         """
         logger.debug("Setting up CSV file")
 
-        if not hasattr(self.args, "csv_file") or not self.args.csv_file:
+        if not hasattr(self.args, "csv_path") or not self.args.csv_path:
             # Use default CSV file in the recording folder
-            logger.debug(f"Using default CSV file path")
-            self.csv_file_path = self.recording_dir / f"{self.recording_dir.name}.csv"
+            logger.debug("Using default CSV file path")
+            self.csv_file_path = self._recording_dir / f"{self._recording_dir.name}.csv"
         else:
             # Use the specified CSV file
-            logger.debug(f"Using CSV file path specified by user")
-            self.csv_file_path = Path(self.args.csv_file).expanduser().resolve()
+            logger.debug("Using CSV file path specified by user")
+            csv_path = Path(self.args.csv_path).expanduser().resolve()
 
-            # Check if the given path is a directory
-            if self.csv_file_path.is_dir():
-                raise FileExistsError(
-                    f"The specified path is a directory, not a file: {self.csv_file_path}"
-                )
+            # Check if the given path is a directory, if so then we put the CSV
+            # file there and name it after the recording directory
+            if csv_path.is_dir() or not csv_path.suffix:
+                logger.debug("Given CSV path is a directory, using it with default CSV file name")
+                self.csv_file_path = csv_path / f"{self._recording_dir.name}.csv"
+                parent_dir = csv_path
+            else:
+                self.csv_file_path = csv_path
+                parent_dir = csv_path.parent
+
+            # Check if we have write permissions to the CSV file or its parent directory
+            if not has_permission(self.csv_file_path):
+                raise UserException(f"You don't have permission to write a CSV file to: {self.csv_file_path}")
 
             # Check if the parent directory exists
-            parent_dir = self.csv_file_path.parent
             if not parent_dir.exists():
                 if Confirm.ask(
-                    f"[red]The directory for the CSV file does not exist[/red]\n Would you like to create it?",
+                    f"[red]The directory for the CSV {parent_dir} file does not exist[/red]\n Would you like to create it?",
                     default=True,
                 ):
                     logger.debug(f"Creating directory for CSV file: {parent_dir}")
-
-                    # Don't catch any exceptions here, let the caller deal with it
+                    # Try to create the directory
                     parent_dir.mkdir(parents=True, exist_ok=True)
+
                 else:
                     raise FileNotFoundError(
                         f"The directory for the requested CSV file location does not exist: {parent_dir}"
@@ -317,7 +313,7 @@ class SignalScribeApp:
 
         # Create all possible tasks but hide them initially
         self.listening_task_id = progress.add_task(
-            f"[cyan3]Monitoring {self.recording_dir} for audio files...[/cyan3] [dim]press CTRL+C to exit[/dim]",
+            f"[cyan3]Monitoring {self._recording_dir} for audio files...[/cyan3] [dim]press CTRL+C to exit[/dim]",
             total=None,  # Indeterminate total
             status="",
             visible=False,
@@ -421,10 +417,7 @@ class SignalScribeApp:
                 # Check if transcriber exists and has populated the shared dict
                 if status == TranscriberStatus.RUNNING:
                     break
-                elif (
-                    status == TranscriberStatus.ERROR
-                    or status == TranscriberStatus.SHUTDOWN
-                ):
+                elif status == TranscriberStatus.ERROR or status == TranscriberStatus.SHUTDOWN:
                     raise Exception("Transcriber process failed to load")
 
             # Wait a bit and try again
@@ -437,9 +430,7 @@ class SignalScribeApp:
         grid.add_column()
         grid.add_column(style="dim", no_wrap=True)
 
-        grid.add_row(
-            "Model", self.model_manager.selected_model, "Set with --model or -m"
-        )
+        grid.add_row("Model", self.model_manager.selected_model, "Set with --model or -m")
         grid.add_row("Compute", self.transcriber.shared_dict["system_info"])
         grid.add_row("CPU Threads", f"{self.args.threads}", "Set with --threads or -t")
         grid.add_row(
@@ -453,12 +444,10 @@ class SignalScribeApp:
             "Set with --log-dir-path, remove with --no-logs",
         )
 
-        if self.monitoring_sdrtrunk:
-            grid.add_row(
-                "Monitoring", f"{str(self.recording_dir)} [red](from SDRTrunk)[/red]"
-            )
+        if self._monitoring_sdrtrunk:
+            grid.add_row("Monitoring", f"{str(self._recording_dir)} [red](from SDRTrunk)[/red]")
         else:
-            grid.add_row("Monitoring", str(self.recording_dir))
+            grid.add_row("Monitoring", str(self._recording_dir))
 
         console.print(grid)
         console.print("")
