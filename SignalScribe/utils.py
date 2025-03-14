@@ -114,6 +114,13 @@ def parse_args(args=None) -> Namespace:
     )
 
     parser.add_argument(
+        "--whisper-logs", "-W",
+        action="store_true",
+        default=False,
+        help="Show whisper.cpp logs in the console",
+    )
+
+    parser.add_argument(
         "-f",
         "--formats",
         type=str,

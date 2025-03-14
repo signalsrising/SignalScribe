@@ -164,6 +164,7 @@ class SignalScribeApp:
             model_name=self.model_manager.selected_model,
             model_dir=self.model_manager.model_dir,
             n_threads=self.args.threads,
+            show_whispercpp_logs=self.args.whisper_logs,
         )
 
         # Initialize output - saves transcriptions to CSV and outputs to console

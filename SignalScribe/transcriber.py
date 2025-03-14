@@ -48,6 +48,7 @@ def transcriber_entry(
     output_queue: Queue,
     shared_dict: dict,
     log_queue: Queue,
+    show_whispercpp_logs: bool,
 ) -> None:
     """Entry point to transcriber worker process, wraps all work in try/except so that we can flag to the main process that an error has occurred"""
     try:
@@ -86,6 +87,7 @@ def transcriber_entry(
             output_queue,
             shared_dict,
             mp_logger,
+            show_whispercpp_logs,   
         )
 
     except Exception as e:
@@ -104,6 +106,7 @@ def transcriber_main(
     output_queue: Queue,
     shared_dict: dict,
     mp_logger: logging.Logger,
+    show_whispercpp_logs: bool,
 ) -> None:
     """Worker process function that runs transcription tasks."""
     mp_logger.info(f"Loading {model_name} model in worker process")
@@ -124,14 +127,14 @@ def transcriber_main(
         n_threads=n_threads,
         print_progress=False,
         print_timestamps=False,
-        redirect_whispercpp_logs_to=None,
+        redirect_whispercpp_logs_to=False if show_whispercpp_logs else None,
     )
 
     mp_logger.info(f"Loaded {model_name} model in worker process")
 
     # Get system info and store it in the shared dictionary
     system_info = model.system_info()
-    logger.debug(f"Got system info")
+    logger.debug("Got system info")
 
     # Parse enabled features
     enabled_features = []
@@ -216,6 +219,7 @@ class Transcriber:
         model_dir: str,
         n_threads: int,
         silent: bool = False,
+        show_whispercpp_logs: bool = False,
     ):
         """Initialize the transcriber with the specified model and settings."""
         self.transcribing_queue = transcribing_queue
@@ -228,7 +232,7 @@ class Transcriber:
         self.model_name = model_name
         self.model_dir = model_dir
         self.n_threads = n_threads
-
+        self.show_whispercpp_logs = show_whispercpp_logs
         # Create a manager for shared objects
         # n.b. unlike the watcher and output threads, this is a separate process with its own
         #      memory space so we need to use a manager to share objects between the processes.
@@ -247,7 +251,7 @@ class Transcriber:
 
         # Start worker process
         self.worker_process = Process(
-            name=f"transcriber_process",
+            name="transcriber_process",
             target=transcriber_entry,
             args=(
                 model_name,
@@ -257,6 +261,7 @@ class Transcriber:
                 self.output_queue,
                 self.shared_dict,
                 self.log_queue,
+                self.show_whispercpp_logs,
             ),
         )
         self.start()
