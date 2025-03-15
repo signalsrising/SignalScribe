@@ -68,15 +68,15 @@ def transcriber_entry(
         # Redirect pywhispercpp logs to our log queue
         # so that they can printed in main process and
         # written to its log file
-        pwc_logger = logging.getLogger("pywhispercpp")
-        pwc_logger.setLevel(logging.DEBUG)  # Set appropriate level
+        # pwc_logger = logging.getLogger("pywhispercpp")
+        # pwc_logger.setLevel(logging.DEBUG)  # Set appropriate level
 
         # Remove any existing handlers to avoid duplication
-        for handler in pwc_logger.handlers[:]:
-            pwc_logger.removeHandler(handler)
+        # for handler in pwc_logger.handlers[:]:
+            # pwc_logger.removeHandler(handler)
 
         # Add queue handler for pywhispercpp
-        pwc_logger.addHandler(QueueHandler(log_queue))
+        # pwc_logger.addHandler(QueueHandler(log_queue))
 
         # Run the transcriber worker loop:
         transcriber_main(

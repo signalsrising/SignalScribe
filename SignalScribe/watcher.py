@@ -8,6 +8,8 @@ import rich.color
 import threading
 import time
 import yaml
+import stat
+import platform
 
 from .transcription import Transcription
 from .defaults import COLORS_FILE_NAME
@@ -149,6 +151,31 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         formats_text = ", ".join(formats)
         logger.info(f"Watching for formats: {formats_text}")
 
+    def _is_hidden(self, path: str) -> bool:
+        """
+        Check if a file or directory is hidden in a cross-platform way.
+        
+        :param path: Path to the file or directory
+        :return: True if the file or directory is hidden, False otherwise
+        """
+        # Get the file/directory name
+        name = os.path.basename(path)
+        
+        # On Unix-like systems (Linux, macOS), hidden files start with a dot
+        if name.startswith('.'):
+            return True
+            
+        # On Windows, check the hidden attribute
+        if platform.system() == 'Windows':
+            try:
+                attrs = os.stat(path).st_file_attributes
+                return bool(attrs & stat.FILE_ATTRIBUTE_HIDDEN)
+            except (AttributeError, OSError):
+                # If we can't get the attributes, fall back to just checking the name
+                pass
+                
+        return False
+
     def _update_colors(self, colors_file_path: str) -> None:
         """Update color highlighting settings from YAML file."""
         if not os.path.exists(colors_file_path):
@@ -191,6 +218,10 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         """Handle file creation events by producing decoding tasks."""
         filepath = event.src_path  # Full path to the new file
         filename = os.path.basename(filepath)  # Name of the new file
+        
+        # Ignore hidden files and directories
+        if self._is_hidden(filepath):
+            return
 
         if filename == COLORS_FILE_NAME:
             self._update_colors(filepath)
@@ -200,13 +231,60 @@ class FolderWatcherHandler(PatternMatchingEventHandler):
         logger.info(f"New audio file detected: {filepath}")
         self.queue.put(Transcription(filepath))
 
+    # def on_any_event(self, event: FileSystemEvent) -> None:
+    #     # Ignore hidden files and directories
+    #     logger.info(f"File event ({event.event_type}): {event.src_path}")
+    #     # if self._is_hidden(event.src_path):
+    #         # return
+            
+
+    def on_moved(self, event: FileSystemEvent) -> None:
+        # Ignore hidden files and directories
+
+        if self._is_hidden(event.dest_path):
+            return
+        
+
+        src_path = event.src_path
+        dest_path = event.dest_path
+        
+        # If both are visible AND:
+        # Source is ultimate parent of destination, ignore
+        # OR
+        # Destination is ultimate parent of source, ignore
+        # This prevents decoding a file again when it is moved to a subfolder from a subfolder to parent
+
+        
+        if os.path.commonpath([src_path]) == os.path.commonpath([src_path, dest_path]) or \
+           os.path.commonpath([dest_path]) == os.path.commonpath([src_path, dest_path]) and \
+           not self._is_hidden(src_path) and \
+           not self._is_hidden(dest_path):
+            logger.debug(f"Ignoring move between parent-child directories: {src_path} -> {dest_path}")
+            return
+                    
+        # Produce a new decoding task
+        logger.info(f"New audio file detected [moved]: {event.dest_path}")
+        self.queue.put(Transcription(event.dest_path))
+
     def on_modified(self, event: FileSystemEvent) -> None:
+        # Ignore hidden files and directories
+        if self._is_hidden(event.src_path):
+            return
+            
         if os.path.basename(event.src_path) == COLORS_FILE_NAME:
             self._update_colors(event.src_path)
 
     def on_closed(self, event: FileSystemEvent) -> None:
+        # Ignore hidden files and directories
+        if self._is_hidden(event.src_path):
+            return
+            
         if os.path.basename(event.src_path) == COLORS_FILE_NAME:
             self._update_colors(event.src_path)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
-        logger.info(f"File deleted: {event.src_path}")
+        # Ignore hidden files and directories
+        if self._is_hidden(event.src_path):
+            return
+            
+        logger.debug(f"File deleted: {event.src_path}")

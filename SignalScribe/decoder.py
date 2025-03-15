@@ -6,7 +6,7 @@ import subprocess
 import numpy as np
 from queue import Empty  # Keep this for exception handling
 from threading import Thread, Event
-
+from time import sleep
 from .logging import logger
 
 
@@ -38,7 +38,7 @@ class Decoder:
                 # logger.debug(f"Decoder thread waiting for task")
 
                 # Use shorter timeout to check stop_event more frequently
-                transcription = decoding_queue.get(timeout=0.5)
+                transcription = decoding_queue.get(timeout=1)
 
                 # Process the file if we're not stopping
                 if not stop_event.is_set():
@@ -98,8 +98,10 @@ class Decoder:
             temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             temp_file_path = temp_file.name
             temp_file.close()
+            process = None
+
             try:
-                subprocess.run(
+                process = subprocess.run(
                     [
                         "ffmpeg",
                         "-i",
@@ -112,10 +114,17 @@ class Decoder:
                         "-y",
                     ],
                     check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
                 )
                 return wav_to_np(temp_file_path)
+            except Exception:
+                # Log the stdout and stderr
+                if process and process.stdout:
+                    logger.debug(f"ffmpeg stdout: {process.stdout}")
+                if process and process.stderr:
+                    logger.debug(f"ffmpeg stderr: {process.stderr}")
             finally:
                 os.remove(temp_file_path)
 

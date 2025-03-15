@@ -2,6 +2,7 @@
 
 # TODO:
 # Test non-Apple hardware acceleration
+# Hash validation attempts to validate the ZIP file, not the contents
 # Read wav file header to know true length of file
 # Filter out nonverbal transcriptions (with user setting)
 # Filter short transcriptions below threshold length (with user setting)
